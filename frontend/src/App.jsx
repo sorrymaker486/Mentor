@@ -1088,6 +1088,8 @@ const ChatView = ({ subject, username, onBack }) => {
   const rawRef = useRef('');
   const rafRef = useRef(null);
   const readerRef = useRef(null);
+  /** 刚流式输出完的会话 id：在此 id 的历史尚未可查时不要用「空历史 → 欢迎页」覆盖界面 */
+  const preferUiOverHistoryUntilRef = useRef(null);
 
   const progressKey = `section_progress_${username}_${subject}`;
 
@@ -1202,9 +1204,13 @@ const ChatView = ({ subject, username, onBack }) => {
       return;
     }
 
+    const streamUiGuard =
+      preferUiOverHistoryUntilRef.current != null &&
+      Number(sessionId) === Number(preferUiOverHistoryUntilRef.current);
+
     try {
       let data = [];
-      for (let attempt = 0; attempt < 8; attempt++) {
+      for (let attempt = 0; attempt < 15; attempt++) {
         const url = `${API_BASE}/history/${sessionId}`;
         const response = await fetch(url);
         const parsed = await response.json().catch(() => []);
@@ -1215,17 +1221,20 @@ const ChatView = ({ subject, username, onBack }) => {
 
         data = Array.isArray(parsed) ? parsed : [];
         if (data.length > 0) break;
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 150));
       }
 
       if (data.length > 0) {
         setMessages(data);
-      } else {
+        preferUiOverHistoryUntilRef.current = null;
+      } else if (!streamUiGuard) {
         setMessages([welcomeMessage]);
       }
     } catch (e) {
       console.error(e);
-      setMessages([welcomeMessage]);
+      if (!streamUiGuard) {
+        setMessages([welcomeMessage]);
+      }
     }
   };
 
@@ -1251,6 +1260,7 @@ const ChatView = ({ subject, username, onBack }) => {
     setQuizModal(null);
     setProgress({ sections: {}, chapters: {} });
     setChapterRightTab('catalog');
+    preferUiOverHistoryUntilRef.current = null;
 
     loadSessions();
     loadLearningProgress();
@@ -1431,6 +1441,8 @@ const ChatView = ({ subject, username, onBack }) => {
       startRenderLoop();
       await pumpStream(r);
       finalizeAssistantStream({ stripLearnMeta: false });
+      const rs = returnedSessionId ? Number(returnedSessionId) : NaN;
+      preferUiOverHistoryUntilRef.current = Number.isNaN(rs) ? null : rs;
       await loadSessions();
       if (returnedSessionId) {
         const numericId = Number(returnedSessionId);
@@ -1446,6 +1458,7 @@ const ChatView = ({ subject, username, onBack }) => {
       bufferRef.current = '';
       displayRef.current = '';
       rawRef.current = '';
+      preferUiOverHistoryUntilRef.current = null;
       setLearnMode(false);
       setCurrentSessionId(null);
       setMessages([
@@ -1502,6 +1515,8 @@ const ChatView = ({ subject, username, onBack }) => {
       startRenderLoop();
       await pumpStream(r);
       const meta = finalizeAssistantStream({ stripLearnMeta: true });
+      const sid = Number(currentSessionId);
+      preferUiOverHistoryUntilRef.current = Number.isNaN(sid) ? null : sid;
       if (meta?.small_quiz && Array.isArray(meta.small_quiz) && meta.small_quiz.length >= 3) {
         setQuizModal({ type: 'small', questions: meta.small_quiz });
       }
@@ -1516,6 +1531,7 @@ const ChatView = ({ subject, username, onBack }) => {
       bufferRef.current = '';
       displayRef.current = '';
       rawRef.current = '';
+      preferUiOverHistoryUntilRef.current = null;
       setMessages((prev) => {
         const updated = [...prev];
         const lastIndex = updated.length - 1;
@@ -1823,6 +1839,16 @@ const ChatView = ({ subject, username, onBack }) => {
       await pumpStream(response);
       finalizeAssistantStream({ stripLearnMeta: false });
 
+      if (returnedSessionId) {
+        const n = Number(returnedSessionId);
+        preferUiOverHistoryUntilRef.current = Number.isNaN(n) ? null : n;
+      } else if (currentSessionId != null) {
+        const n = Number(currentSessionId);
+        preferUiOverHistoryUntilRef.current = Number.isNaN(n) ? null : n;
+      } else {
+        preferUiOverHistoryUntilRef.current = null;
+      }
+
       await loadSessions();
       markSectionVisited(sessionScopeKey);
 
@@ -1834,6 +1860,7 @@ const ChatView = ({ subject, username, onBack }) => {
       }
     } catch (e) {
       console.error(e);
+      preferUiOverHistoryUntilRef.current = null;
       const hint =
         e instanceof Error && e.message?.trim()
           ? `抱歉，对话暂时失败：${e.message.trim()}`
