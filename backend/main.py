@@ -322,19 +322,27 @@ def _smtp_configured() -> bool:
     return bool(os.getenv("PASSWORD_RESET_SMTP_HOST", "").strip())
 
 
+def _strip_env_secret(val: str) -> str:
+    """去掉复制粘贴夹带的 BOM、首尾空白与成对引号。"""
+    s = (val or "").strip().strip("\ufeff")
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        s = s[1:-1].strip()
+    return s
+
+
 def _resend_api_key() -> str:
     """兼容 Render 上误用 Resend 文档里的变量名 RESEND_API_KEY。"""
-    return (
-        os.getenv("PASSWORD_RESET_RESEND_API_KEY", "").strip()
-        or os.getenv("RESEND_API_KEY", "").strip()
+    raw = _strip_env_secret(os.getenv("PASSWORD_RESET_RESEND_API_KEY", "")) or _strip_env_secret(
+        os.getenv("RESEND_API_KEY", "")
     )
+    return raw
 
 
 def _resend_from_header() -> str:
-    return (
-        os.getenv("PASSWORD_RESET_RESEND_FROM", "").strip()
-        or os.getenv("RESEND_FROM", "").strip()
+    raw = _strip_env_secret(os.getenv("PASSWORD_RESET_RESEND_FROM", "")) or _strip_env_secret(
+        os.getenv("RESEND_FROM", "")
     )
+    return raw
 
 
 def _resend_configured() -> bool:
