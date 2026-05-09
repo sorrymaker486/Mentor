@@ -1440,7 +1440,7 @@ const ChatView = ({ subject, username, onBack }) => {
       const returnedSessionId = r.headers.get('X-Session-Id');
       startRenderLoop();
       await pumpStream(r);
-      finalizeAssistantStream({ stripLearnMeta: false });
+      await finalizeAssistantStream({ stripLearnMeta: false });
       const rs = returnedSessionId ? Number(returnedSessionId) : NaN;
       preferUiOverHistoryUntilRef.current = Number.isNaN(rs) ? null : rs;
       await loadSessions();
@@ -1514,7 +1514,7 @@ const ChatView = ({ subject, username, onBack }) => {
 
       startRenderLoop();
       await pumpStream(r);
-      const meta = finalizeAssistantStream({ stripLearnMeta: true });
+      const meta = await finalizeAssistantStream({ stripLearnMeta: true });
       const sid = Number(currentSessionId);
       preferUiOverHistoryUntilRef.current = Number.isNaN(sid) ? null : sid;
       if (meta?.small_quiz && Array.isArray(meta.small_quiz) && meta.small_quiz.length >= 3) {
@@ -1659,6 +1659,27 @@ const ChatView = ({ subject, username, onBack }) => {
     }
   };
 
+  /** 打字机：每条助手消息最小间隔（毫秒），即使网络一次性返回整段也能逐字显现 */
+  const TYPING_MIN_INTERVAL_MS = 28;
+
+  const popFirstGrapheme = (s) => {
+    if (!s) return { grapheme: '', rest: '' };
+    try {
+      const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+      for (const data of seg.segment(s)) {
+        return {
+          grapheme: data.segment,
+          rest: s.slice(data.index + data.segment.length),
+        };
+      }
+      return { grapheme: '', rest: s };
+    } catch {
+      const arr = Array.from(s);
+      const grapheme = arr[0] ?? '';
+      return { grapheme, rest: arr.slice(1).join('') };
+    }
+  };
+
   const pumpStream = async (response) => {
     if (!response.body) throw new Error('没有可读取的响应流');
     const reader = response.body.getReader();
@@ -1683,15 +1704,23 @@ const ChatView = ({ subject, username, onBack }) => {
     }
   };
 
-  const finalizeAssistantStream = ({ stripLearnMeta = false } = {}) => {
+  const finalizeAssistantStream = async ({ stripLearnMeta = false } = {}) => {
+    await new Promise((resolve) => {
+      const waitEmpty = () => {
+        if (bufferRef.current.length > 0) {
+          requestAnimationFrame(waitEmpty);
+        } else {
+          resolve(undefined);
+        }
+      };
+      waitEmpty();
+    });
+
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-    if (bufferRef.current.length > 0) {
-      displayRef.current += bufferRef.current;
-      bufferRef.current = '';
-    }
+
     let meta = null;
     let content = displayRef.current;
     if (stripLearnMeta) {
@@ -1713,26 +1742,27 @@ const ChatView = ({ subject, username, onBack }) => {
 
   const startRenderLoop = () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    let lastEmit = 0;
 
-    const tick = () => {
-      if (bufferRef.current.length > 0) {
-        const sliceSize = 4;
-        const piece = bufferRef.current.slice(0, sliceSize);
-        bufferRef.current = bufferRef.current.slice(sliceSize);
-
-        displayRef.current += piece;
-
-        setMessages((prev) => {
-          const updated = [...prev];
-          const lastIndex = updated.length - 1;
-          if (lastIndex >= 0 && updated[lastIndex].role === 'assistant') {
-            updated[lastIndex] = {
-              ...updated[lastIndex],
-              content: displayRef.current,
-            };
-          }
-          return updated;
-        });
+    const tick = (now = performance.now()) => {
+      if (bufferRef.current.length > 0 && now - lastEmit >= TYPING_MIN_INTERVAL_MS) {
+        lastEmit = now;
+        const { grapheme, rest } = popFirstGrapheme(bufferRef.current);
+        bufferRef.current = rest;
+        if (grapheme) {
+          displayRef.current += grapheme;
+          setMessages((prev) => {
+            const updated = [...prev];
+            const lastIndex = updated.length - 1;
+            if (lastIndex >= 0 && updated[lastIndex].role === 'assistant') {
+              updated[lastIndex] = {
+                ...updated[lastIndex],
+                content: displayRef.current,
+              };
+            }
+            return updated;
+          });
+        }
       }
 
       rafRef.current = requestAnimationFrame(tick);
@@ -1837,7 +1867,7 @@ const ChatView = ({ subject, username, onBack }) => {
 
       startRenderLoop();
       await pumpStream(response);
-      finalizeAssistantStream({ stripLearnMeta: false });
+      await finalizeAssistantStream({ stripLearnMeta: false });
 
       if (returnedSessionId) {
         const n = Number(returnedSessionId);
