@@ -103,6 +103,14 @@ class StripApiPrefixMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+def stream_response_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """流式 text/plain 响应：降低反向代理整包缓冲，便于浏览器逐块读取与前端打字效果。"""
+    h = dict(extra or {})
+    h["Cache-Control"] = "no-cache, no-transform"
+    h["X-Accel-Buffering"] = "no"
+    return h
+
+
 # ----------------------------
 # 数据库配置
 # ----------------------------
@@ -1814,7 +1822,9 @@ def learning_studio_resource_stream(body: StudioResourceStreamBody, db: Session 
 
         hdr = safety_headers(spec["agent_chain"])
         hdr["X-Resource-Type"] = body.resource_type
-        return StreamingResponse(generate_chunks(), media_type="text/plain", headers=hdr)
+        return StreamingResponse(
+            generate_chunks(), media_type="text/plain", headers=stream_response_headers(hdr)
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"资源生成失败: {exc}") from exc
 
@@ -1973,7 +1983,7 @@ def learning_start_section(body: LearningStartBody, db: Session = Depends(get_db
     return StreamingResponse(
         generate_chunks(),
         media_type="text/plain",
-        headers={"X-Session-Id": str(session_id)},
+        headers=stream_response_headers({"X-Session-Id": str(session_id)}),
     )
 
 
@@ -2185,7 +2195,7 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
     return StreamingResponse(
         generate_chunks(),
         media_type="text/plain",
-        headers={"X-Session-Id": str(session_id)},
+        headers=stream_response_headers({"X-Session-Id": str(session_id)}),
     )
 
 
@@ -2601,7 +2611,7 @@ def _execute_ask_stream(
         return StreamingResponse(
             generate_chunks(),
             media_type="text/plain",
-            headers={"X-Session-Id": str(session.id)},
+            headers=stream_response_headers({"X-Session-Id": str(session.id)}),
         )
     except Exception:
         raise HTTPException(status_code=500, detail="AI 服务不可用")

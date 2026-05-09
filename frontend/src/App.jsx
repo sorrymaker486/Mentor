@@ -1335,29 +1335,39 @@ const ChatView = ({ subject, username, onBack }) => {
   useEffect(() => {
     if (!sessionScopeKey) return;
 
+    /** 带学首轮请求进行中：勿清空消息、勿自动切到旧会话（否则会 loadHistory 覆盖流式界面）。 */
+    if (learnMode && isLoading) return;
+
     const chapterSessions = sessions.filter((s) => s.chapter === sessionScopeKey);
 
     if (chapterSessions.length > 0) {
-      const preferred = chapterSessions.find((s) => s.id === currentSessionId) || chapterSessions[0];
-      if (preferred && preferred.id !== currentSessionId) {
+      const preferred =
+        chapterSessions.find((s) => Number(s.id) === Number(currentSessionId)) || chapterSessions[0];
+      if (preferred && Number(preferred.id) !== Number(currentSessionId)) {
         setCurrentSessionId(preferred.id);
       }
     } else {
+      /** AI 带学模式下可能短暂尚无会话记录；勿重置为欢迎页以免打断输出 */
+      if (learnMode) return;
       if (currentSessionId !== null) {
         setCurrentSessionId(null);
       }
       setMessages([welcomeMessage]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionScopeKey, sessions]);
+  }, [sessionScopeKey, sessions, learnMode, isLoading]);
 
   useEffect(() => {
     if (!currentSessionId) {
-      setMessages([welcomeMessage]);
+      if (!learnMode) {
+        setMessages([welcomeMessage]);
+      }
       return;
     }
 
-    const matched = sessions.find((s) => s.id === currentSessionId);
+    if (learnMode && isLoading) return;
+
+    const matched = sessions.find((s) => Number(s.id) === Number(currentSessionId));
     if (matched) {
       if (matched.chapter && catalog.length) {
         applySessionChapter(matched.chapter);
@@ -1366,7 +1376,7 @@ const ChatView = ({ subject, username, onBack }) => {
     }
     /* 若列表尚未含当前 id（例如刚创建带学会话），勿清空消息，避免打断流式输出 */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSessionId, catalog]);
+  }, [currentSessionId, catalog, learnMode, isLoading]);
 
   const [quizPicks, setQuizPicks] = useState([]);
 
@@ -1690,7 +1700,7 @@ const ChatView = ({ subject, username, onBack }) => {
 
     const tick = () => {
       if (bufferRef.current.length > 0) {
-        const sliceSize = 8;
+        const sliceSize = 4;
         const piece = bufferRef.current.slice(0, sliceSize);
         bufferRef.current = bufferRef.current.slice(sliceSize);
 
@@ -1699,7 +1709,7 @@ const ChatView = ({ subject, username, onBack }) => {
         setMessages((prev) => {
           const updated = [...prev];
           const lastIndex = updated.length - 1;
-          if (lastIndex >= 0) {
+          if (lastIndex >= 0 && updated[lastIndex].role === 'assistant') {
             updated[lastIndex] = {
               ...updated[lastIndex],
               content: displayRef.current,
