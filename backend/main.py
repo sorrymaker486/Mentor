@@ -846,8 +846,29 @@ def _build_learning_reference(
     return label, body[:12000]
 
 
+_llm_client: Optional[OpenAI] = None
+
+
+def _get_llm_client() -> OpenAI:
+    """仅从环境变量读取密钥，不在仓库中写死默认密钥。支持 API_KEY 或 OPENAI_API_KEY。"""
+    global _llm_client
+    if _llm_client is None:
+        key = (os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
+        base = (os.getenv("BASE_URL") or "https://api.openai.com/v1").strip()
+        if not key:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "未配置大模型密钥：请在 backend/.env 设置 API_KEY，或设置环境变量 OPENAI_API_KEY。"
+                    "示例见 backend/.env.example。"
+                ),
+            )
+        _llm_client = OpenAI(api_key=key, base_url=base)
+    return _llm_client
+
+
 def _learn_chat_complete(messages: List[dict[str, str]], temperature: float = 0.35) -> str:
-    resp = client.chat.completions.create(
+    resp = _get_llm_client().chat.completions.create(
         model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
         messages=cast(List[ChatCompletionMessageParam], messages),
         temperature=temperature,
@@ -1068,11 +1089,6 @@ async def api_root():
         },
     }
 
-
-client = OpenAI(
-    api_key=os.getenv("API_KEY", "your_key_here"),
-    base_url=os.getenv("BASE_URL", "https://api.openai.com/v1")
-)
 
 class UserLogin(BaseModel):
     username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
@@ -1683,7 +1699,7 @@ def learning_studio_resource_stream(body: StudioResourceStreamBody, db: Session 
         {"role": "user", "content": "\n".join(user_lines)},
     ]
     try:
-        response = client.chat.completions.create(
+        response = _get_llm_client().chat.completions.create(
             model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
             messages=cast(List[ChatCompletionMessageParam], messages),
             stream=True,
@@ -1826,7 +1842,7 @@ def learning_start_section(body: LearningStartBody, db: Session = Depends(get_db
     ]
 
     try:
-        response = client.chat.completions.create(
+        response = _get_llm_client().chat.completions.create(
             model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
             messages=cast(List[ChatCompletionMessageParam], messages),
             stream=True,
@@ -1921,7 +1937,7 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
         api_messages.append(history_content_to_chat_message(h.role, h.content))
 
     try:
-        response = client.chat.completions.create(
+        response = _get_llm_client().chat.completions.create(
             model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
             messages=cast(List[ChatCompletionMessageParam], api_messages),
             stream=True,
@@ -2460,7 +2476,7 @@ def _execute_ask_stream(
         messages.append(history_content_to_chat_message(m.role, m.content))
 
     try:
-        response = client.chat.completions.create(
+        response = _get_llm_client().chat.completions.create(
             model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
             messages=cast(List[ChatCompletionMessageParam], messages),
             stream=True,
