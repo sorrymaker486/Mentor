@@ -44,7 +44,6 @@ from safety import (
 from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
@@ -67,10 +66,16 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 def static_site_dir() -> Optional[Path]:
     """生产环境指向 Vite 构建产物目录（内含 index.html 与 assets/）。"""
     raw = os.getenv("STATIC_ROOT", "").strip()
-    if not raw:
-        return None
-    p = Path(raw).resolve()
-    return p if p.is_dir() else None
+    candidates: list[Path] = []
+    if raw:
+        candidates.append(Path(raw).resolve())
+    elif os.getenv("RENDER", "").strip().lower() in ("true", "1", "yes"):
+        # Dockerfile 将构建产物放在 /app/static；遗漏 STATIC_ROOT 时仍可加载前端
+        candidates.append(Path("/app/static").resolve())
+    for p in candidates:
+        if p.is_dir() and (p / "index.html").is_file():
+            return p
+    return None
 
 
 def strip_api_prefix_enabled() -> bool:
@@ -80,7 +85,7 @@ def strip_api_prefix_enabled() -> bool:
         return False
     if v in ("1", "true", "yes"):
         return True
-    return bool(os.getenv("STATIC_ROOT", "").strip())
+    return static_site_dir() is not None
 
 
 class StripApiPrefixMiddleware(BaseHTTPMiddleware):
@@ -2620,9 +2625,21 @@ def ask_ai_post(body: AskPostBody, db: Session = Depends(get_db)):
 
 _sd_root = static_site_dir()
 if _sd_root is not None:
-    _assets_dir = _sd_root / "assets"
-    if _assets_dir.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="mentor_assets")
+    _assets_root = (_sd_root / "assets").resolve()
+    if _assets_root.is_dir():
+
+        @app.get("/assets/{filepath:path}")
+        async def mentor_serve_asset(filepath: str):
+            if "\\" in filepath:
+                raise HTTPException(status_code=404)
+            try:
+                target = (_assets_root / filepath).resolve()
+                target.relative_to(_assets_root)
+            except ValueError:
+                raise HTTPException(status_code=404)
+            if not target.is_file():
+                raise HTTPException(status_code=404)
+            return FileResponse(target)
 
     def _public_file_handler(path: Path):
         async def _send() -> FileResponse:
