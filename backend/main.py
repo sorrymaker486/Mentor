@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import json
@@ -50,6 +51,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import create_engine, ForeignKey, DateTime, String, inspect, text, Text, UniqueConstraint, Float, Integer, Boolean
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import (
     sessionmaker,
     Session,
@@ -1354,14 +1356,31 @@ async def register(user: UserRegister, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="用户名已被占用")
     if user.email and db.query(UserDB).filter(UserDB.email == user.email).first():
         raise HTTPException(status_code=400, detail="该邮箱已被其他账号绑定")
-    db.add(
-        UserDB(
-            username=user.username,
-            password=pwd_context.hash(user.password),
-            email=user.email,
+    log = logging.getLogger("uvicorn.error")
+    try:
+        hashed = pwd_context.hash(user.password)
+    except Exception as exc:
+        log.exception("POST /register password hash failed (check bcrypt/passlib versions): %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="注册失败：服务端密码组件异常，请联系管理员或稍后重试",
+        ) from exc
+    try:
+        db.add(
+            UserDB(
+                username=user.username,
+                password=hashed,
+                email=user.email,
+            )
         )
-    )
-    db.commit()
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="用户名已被占用")
+    except Exception as exc:
+        db.rollback()
+        log.exception("POST /register failed: %s", exc)
+        raise HTTPException(status_code=500, detail="注册失败，请稍后重试") from exc
     return {"message": "注册成功"}
 
 @app.post("/login")
