@@ -1944,7 +1944,6 @@ def learning_start_section(body: LearningStartBody, db: Session = Depends(get_db
     prog.small_quiz_score = None
     prog.small_quiz_passed = False
     prog.updated_at = datetime.utcnow()
-    db.commit()
 
     sk = f"{body.chapter_id}|{body.section_id}"
     sess = ChatSessionDB(
@@ -1965,17 +1964,18 @@ def learning_start_section(body: LearningStartBody, db: Session = Depends(get_db
         {"role": "user", "content": "请开始本小节的带学讲解（Markdown）。"},
     ]
 
-    try:
-        response = _get_llm_client().chat.completions.create(
-            model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
-            messages=cast(List[ChatCompletionMessageParam], messages),
-            stream=True,
-            temperature=0.42,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"AI 不可用: {exc}") from exc
-
     def generate_chunks():
+        try:
+            response = _get_llm_client().chat.completions.create(
+                model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
+                messages=cast(List[ChatCompletionMessageParam], messages),
+                stream=True,
+                temperature=0.42,
+            )
+        except Exception as exc:
+            yield f"【AI 不可用：{exc}】"
+            return
+
         raw_answer, clean_answer = "", ""
         for chunk in response:
             if chunk.choices and chunk.choices[0].delta.content:
@@ -2060,16 +2060,6 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
     for h in hist[-28:]:
         api_messages.append(history_content_to_chat_message(h.role, h.content))
 
-    try:
-        response = _get_llm_client().chat.completions.create(
-            model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
-            messages=cast(List[ChatCompletionMessageParam], api_messages),
-            stream=True,
-            temperature=0.38,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"导师流式响应失败: {exc}") from exc
-
     session_id = sess.id
     uid = u.id
     subject = body.subject
@@ -2078,6 +2068,17 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
     answer_text = answer_plain or ("（学员本轮上传了附图，无额外文字说明。）" if imgs else answer_plain)
 
     def generate_chunks():
+        try:
+            response = _get_llm_client().chat.completions.create(
+                model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
+                messages=cast(List[ChatCompletionMessageParam], api_messages),
+                stream=True,
+                temperature=0.38,
+            )
+        except Exception as exc:
+            yield f"【导师响应暂时不可用：{exc}】"
+            return
+
         raw_answer, clean_answer = "", ""
         for chunk in response:
             if chunk.choices and chunk.choices[0].delta.content:
@@ -2560,13 +2561,11 @@ def _execute_ask_stream(
             session_kind="chat",
         )
         db.add(session)
-        db.commit()
-        db.refresh(session)
     else:
         session.chapter = session_key[:512]
         session.updated_at = datetime.utcnow()
-        db.commit()
 
+    db.flush()
     db.add(ChatHistoryDB(session_id=session.id, role="user", content=stored_user))
     db.commit()
 
@@ -2599,39 +2598,42 @@ def _execute_ask_stream(
     for m in reversed(db_messages):
         messages.append(history_content_to_chat_message(m.role, m.content))
 
-    try:
-        response = _get_llm_client().chat.completions.create(
-            model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
-            messages=cast(List[ChatCompletionMessageParam], messages),
-            stream=True,
-        )
+    sid_for_stream = session.id
 
-        def generate_chunks():
-            raw_answer, clean_answer = "", ""
-            for chunk in response:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    delta = chunk.choices[0].delta.content
-                    raw_answer += delta
-                    new_clean = collapse_repetition(raw_answer)
-                    emit = safe_stream_delta(clean_answer, new_clean)
-                    if emit:
-                        yield emit
-                    clean_answer = new_clean
+    def generate_chunks():
+        try:
+            response = _get_llm_client().chat.completions.create(
+                model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
+                messages=cast(List[ChatCompletionMessageParam], messages),
+                stream=True,
+            )
+        except Exception:
+            yield "【AI 服务暂时不可用，请稍后重试。】"
+            return
 
-            with SessionLocal() as save_db:
-                save_db.add(ChatHistoryDB(session_id=session.id, role="assistant", content=clean_answer))
-                s = save_db.query(ChatSessionDB).filter(ChatSessionDB.id == session.id).first()
-                if s:
-                    s.updated_at = datetime.utcnow()
-                save_db.commit()
+        raw_answer, clean_answer = "", ""
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                delta = chunk.choices[0].delta.content
+                raw_answer += delta
+                new_clean = collapse_repetition(raw_answer)
+                emit = safe_stream_delta(clean_answer, new_clean)
+                if emit:
+                    yield emit
+                clean_answer = new_clean
 
-        return StreamingResponse(
-            generate_chunks(),
-            media_type="text/plain",
-            headers=stream_response_headers({"X-Session-Id": str(session.id)}),
-        )
-    except Exception:
-        raise HTTPException(status_code=500, detail="AI 服务不可用")
+        with SessionLocal() as save_db:
+            save_db.add(ChatHistoryDB(session_id=sid_for_stream, role="assistant", content=clean_answer))
+            s = save_db.query(ChatSessionDB).filter(ChatSessionDB.id == sid_for_stream).first()
+            if s:
+                s.updated_at = datetime.utcnow()
+            save_db.commit()
+
+    return StreamingResponse(
+        generate_chunks(),
+        media_type="text/plain",
+        headers=stream_response_headers({"X-Session-Id": str(sid_for_stream)}),
+    )
 
 
 @app.get("/ask")

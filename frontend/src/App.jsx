@@ -2100,42 +2100,62 @@ const ChatView = ({ subject, username, onBack }) => {
         <div className="pa-vscan absolute bottom-6 left-3 top-6 z-10 hidden md:block" aria-hidden />
         <div className="scrollbar-hide relative z-10 min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-8 md:py-6">
           <div className="mx-auto max-w-3xl space-y-10">
-            {messages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div
-                  className={`chat-prose max-w-[92%] border px-6 py-5 shadow-[0_16px_44px_rgba(26,31,36,0.05)] transition-all duration-700 ease-out ${
-                    m.role === 'user'
-                      ? 'rounded-2xl rounded-br-sm border-[#1a1f24]/[0.1] bg-[#1a1f24] text-[#faf9f7]'
-                      : 'rounded-2xl rounded-tl-sm border-[#1a1f24]/[0.06] bg-white text-[#1a1f24]'
-                  }`}
-                >
-                  {m.role === 'user' ? (
-                    <UserMessageBody content={m.content} />
-                  ) : (
-                    <div className="prose prose-sm max-w-none prose-neutral">
-                      <ReactMarkdown
-                        remarkPlugins={markdownRemarkPlugins}
-                        rehypePlugins={markdownRehypePlugins}
-                        components={{
-                          code({ inline, className, children }) {
-                            const match = /language-(\w+)/.exec(className || '');
-                            return !inline && match ? (
-                              <CodeBlock language={match[1]} value={String(children).replace(/\n$/, '')} />
-                            ) : (
-                              <code className="rounded bg-[#1a1f24]/[0.06] px-1.5 py-0.5 font-mono text-[0.9em] text-red-800">
-                                {children}
-                              </code>
-                            );
-                          },
-                        }}
+            {messages.map((m, i) => {
+              const assistantTyping =
+                m.role === 'assistant' &&
+                isLoading &&
+                i === messages.length - 1 &&
+                !(typeof m.content === 'string' && m.content.trim());
+              return (
+                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div
+                    className={`chat-prose max-w-[92%] border px-6 py-5 shadow-[0_16px_44px_rgba(26,31,36,0.05)] transition-all duration-700 ease-out ${
+                      m.role === 'user'
+                        ? 'rounded-2xl rounded-br-sm border-[#1a1f24]/[0.1] bg-[#1a1f24] text-[#faf9f7]'
+                        : 'rounded-2xl rounded-tl-sm border-[#1a1f24]/[0.06] bg-white text-[#1a1f24]'
+                    }`}
+                  >
+                    {m.role === 'user' ? (
+                      <UserMessageBody content={m.content} />
+                    ) : assistantTyping ? (
+                      <div
+                        className="flex min-h-[1.5rem] items-center gap-2.5 text-[13px] text-[#1a1f24]/50"
+                        aria-live="polite"
+                        aria-busy="true"
                       >
-                        {normalizeMathText(m.content)}
-                      </ReactMarkdown>
-                    </div>
-                  )}
+                        <span className="inline-flex items-center gap-1" aria-hidden>
+                          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[#b8955c]/80 [animation-duration:1.1s]" />
+                          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[#b8955c]/65 [animation-duration:1.1s] [animation-delay:0.2s]" />
+                          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[#b8955c]/50 [animation-duration:1.1s] [animation-delay:0.4s]" />
+                        </span>
+                        <span className="font-medium tracking-wide">正在输入中…</span>
+                      </div>
+                    ) : (
+                      <div className="prose prose-sm max-w-none prose-neutral">
+                        <ReactMarkdown
+                          remarkPlugins={markdownRemarkPlugins}
+                          rehypePlugins={markdownRehypePlugins}
+                          components={{
+                            code({ inline, className, children }) {
+                              const match = /language-(\w+)/.exec(className || '');
+                              return !inline && match ? (
+                                <CodeBlock language={match[1]} value={String(children).replace(/\n$/, '')} />
+                              ) : (
+                                <code className="rounded bg-[#1a1f24]/[0.06] px-1.5 py-0.5 font-mono text-[0.9em] text-red-800">
+                                  {children}
+                                </code>
+                              );
+                            },
+                          }}
+                        >
+                          {normalizeMathText(m.content)}
+                        </ReactMarkdown>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             <div ref={messagesEndRef} />
           </div>
         </div>
