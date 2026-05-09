@@ -16,6 +16,7 @@ __pycache__/
 .env.*
 !.env.example
 render.deploy.env
+backend/.neon_database_url
 
 # Local DB (dev)
 backend/users.db
