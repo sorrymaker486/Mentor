@@ -322,20 +322,35 @@ def _smtp_configured() -> bool:
     return bool(os.getenv("PASSWORD_RESET_SMTP_HOST", "").strip())
 
 
+def _resend_api_key() -> str:
+    """兼容 Render 上误用 Resend 文档里的变量名 RESEND_API_KEY。"""
+    return (
+        os.getenv("PASSWORD_RESET_RESEND_API_KEY", "").strip()
+        or os.getenv("RESEND_API_KEY", "").strip()
+    )
+
+
+def _resend_from_header() -> str:
+    return (
+        os.getenv("PASSWORD_RESET_RESEND_FROM", "").strip()
+        or os.getenv("RESEND_FROM", "").strip()
+    )
+
+
 def _resend_configured() -> bool:
-    return bool(os.getenv("PASSWORD_RESET_RESEND_API_KEY", "").strip())
+    return bool(_resend_api_key())
 
 
 def _send_password_reset_resend(to_addr: str, username: str, token: str) -> bool:
     """经 Resend HTTPS API 发信（适合 Render 等屏蔽出站 SMTP 的环境）。"""
-    api_key = os.getenv("PASSWORD_RESET_RESEND_API_KEY", "").strip()
-    from_addr = os.getenv("PASSWORD_RESET_RESEND_FROM", "").strip()
+    api_key = _resend_api_key()
+    from_addr = _resend_from_header()
     if not api_key:
         return False
     if not from_addr:
         print(
-            "[PASSWORD_RESET] Resend：已设置 PASSWORD_RESET_RESEND_API_KEY，"
-            "但未设置 PASSWORD_RESET_RESEND_FROM（须在 Resend 控制台验证过的发件地址）。"
+            "[PASSWORD_RESET] Resend：已配置 API Key，"
+            "但未设置 PASSWORD_RESET_RESEND_FROM 或 RESEND_FROM（须在 Resend 控制台验证过的发件地址）。"
         )
         return False
     link = _magic_reset_url(username, token)
@@ -556,7 +571,8 @@ def _deliver_password_reset_notification(username: str, token: str, user_email: 
             )
     elif not _smtp_configured():
         mail_skip_reason = (
-            "后端未配置邮件投递：请设置 PASSWORD_RESET_RESEND_API_KEY + PASSWORD_RESET_RESEND_FROM（推荐，走 HTTPS），"
+            "后端未配置邮件投递：请设置 PASSWORD_RESET_RESEND_API_KEY 或 RESEND_API_KEY，"
+            "以及 PASSWORD_RESET_RESEND_FROM 或 RESEND_FROM（推荐走 HTTPS）；"
             "或配置 PASSWORD_RESET_SMTP_*（部分云平台禁止出站 SMTP）。"
         )
     else:
@@ -564,7 +580,7 @@ def _deliver_password_reset_notification(username: str, token: str, user_email: 
         if not mailed:
             mail_skip_reason = (
                 "已尝试 SMTP 但发送未成功。Render 等环境常屏蔽 SMTP 出站，请改用 Resend："
-                "设置 PASSWORD_RESET_RESEND_API_KEY 与 PASSWORD_RESET_RESEND_FROM。"
+                "设置 PASSWORD_RESET_RESEND_API_KEY（或 RESEND_API_KEY）与 PASSWORD_RESET_RESEND_FROM（或 RESEND_FROM）。"
                 "亦可向上滚动终端查找 [PASSWORD_RESET] SMTP 报错详情。"
             )
 
