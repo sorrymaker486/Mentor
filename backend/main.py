@@ -6,6 +6,7 @@ import base64
 import hashlib
 import secrets
 import smtplib
+import socket
 import ssl
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -319,6 +320,55 @@ def _smtp_configured() -> bool:
     return bool(os.getenv("PASSWORD_RESET_SMTP_HOST", "").strip())
 
 
+def _smtp_prefer_ipv4() -> bool:
+    return os.getenv("PASSWORD_RESET_SMTP_PREFER_IPV4", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+
+
+def _smtp_tcp_socket(host: str, port: int, timeout: float) -> socket.socket:
+    """
+    默认优先 IPv4 再 IPv6。容器常见仅有 IPv4 出口时，纯 IPv6 目标会报 [Errno 101] Network is unreachable。
+    关闭：PASSWORD_RESET_SMTP_PREFER_IPV4=0（使用系统默认解析顺序）。
+    """
+    if not _smtp_prefer_ipv4():
+        return socket.create_connection((host, port), timeout)
+
+    last_err: OSError | None = None
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            for res in socket.getaddrinfo(host, port, family, socket.SOCK_STREAM):
+                af, socktype, proto, _, sa = res
+                s = socket.socket(af, socktype, proto)
+                s.settimeout(timeout)
+                try:
+                    s.connect(sa)
+                    return s
+                except OSError as e:
+                    last_err = e
+                    s.close()
+        except socket.gaierror:
+            continue
+    if last_err:
+        raise last_err
+    raise OSError(f"无法解析或连接 SMTP 主机 {host!r}:{port}")
+
+
+class _SMTPPreferIPv4(smtplib.SMTP):
+    """与 smtplib.SMTP 相同，但建连时优先 IPv4。"""
+
+    def _get_socket(self, host, port, timeout):
+        return _smtp_tcp_socket(host, port, timeout)
+
+
+class _SMTPSSLPreferIPv4(smtplib.SMTP_SSL):
+    def _get_socket(self, host, port, timeout):
+        plain = _smtp_tcp_socket(host, port, timeout)
+        return self.context.wrap_socket(plain, server_hostname=host)
+
+
 def _send_password_reset_email(to_addr: str, username: str, token: str) -> bool:
     """使用环境变量中的 SMTP 发送重置链接；失败返回 False（由调用方改打控制台）。"""
     host = os.getenv("PASSWORD_RESET_SMTP_HOST", "").strip()
@@ -361,12 +411,12 @@ def _send_password_reset_email(to_addr: str, username: str, token: str) -> bool:
         # 较短超时：避免托管平台网关先于 SMTP 断开导致 502；真实发信在 BackgroundTasks 中执行
         smtp_timeout = min(18, int(os.getenv("PASSWORD_RESET_SMTP_TIMEOUT_SEC", "14")))
         if port == 465:
-            with smtplib.SMTP_SSL(host, port, timeout=smtp_timeout, context=ctx) as smtp:
+            with _SMTPSSLPreferIPv4(host, port, timeout=smtp_timeout, context=ctx) as smtp:
                 if user:
                     smtp.login(user, password)
                 smtp.send_message(msg)
         else:
-            with smtplib.SMTP(host, port, timeout=smtp_timeout) as smtp:
+            with _SMTPPreferIPv4(host, port, timeout=smtp_timeout) as smtp:
                 smtp.ehlo()
                 if use_tls and port not in (25,):
                     try:
@@ -392,10 +442,19 @@ def _send_password_reset_email(to_addr: str, username: str, token: str) -> bool:
         )
         return False
     except Exception as exc:
+        errno = getattr(exc, "errno", None)
+        extra = ""
+        if errno == 101 or (isinstance(exc, OSError) and exc.errno == 101):
+            extra = (
+                "\n  [Errno 101] 多为网络不可达：① 托管平台禁止出站 SMTP（Render 等或对 25/465/587 有限制），"
+                "可改用 HTTPS 邮件 API（Resend / SendGrid 等）；② 容器仅有 IPv4，已默认优先 IPv4 建连，"
+                "仍失败请查看 Render 出站策略或联系平台支持。"
+            )
         print(
             f"[PASSWORD_RESET] SMTP 发送失败: {exc}\n"
             "  常见原因：端口与加密方式不匹配（587+STARTTLS / 465+SSL）、须使用「授权码」而非登录密码、"
             "发件人 PASSWORD_RESET_SMTP_FROM 与 SMTP 登录邮箱不一致被拒、PUBLIC_APP_URL 错误不影响投递但链接会无效。"
+            f"{extra}"
         )
         return False
 
