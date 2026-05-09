@@ -42,7 +42,7 @@ from safety import (
     sanitize_user_plaintext,
     safety_headers,
 )
-from fastapi import FastAPI, HTTPException, Depends, Query, Request
+from fastapi import FastAPI, HTTPException, Depends, Query, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -358,13 +358,15 @@ def _send_password_reset_email(to_addr: str, username: str, token: str) -> bool:
 
     ctx = ssl.create_default_context()
     try:
+        # 较短超时：避免托管平台网关先于 SMTP 断开导致 502；真实发信在 BackgroundTasks 中执行
+        smtp_timeout = min(18, int(os.getenv("PASSWORD_RESET_SMTP_TIMEOUT_SEC", "14")))
         if port == 465:
-            with smtplib.SMTP_SSL(host, port, timeout=30, context=ctx) as smtp:
+            with smtplib.SMTP_SSL(host, port, timeout=smtp_timeout, context=ctx) as smtp:
                 if user:
                     smtp.login(user, password)
                 smtp.send_message(msg)
         else:
-            with smtplib.SMTP(host, port, timeout=30) as smtp:
+            with smtplib.SMTP(host, port, timeout=smtp_timeout) as smtp:
                 smtp.ehlo()
                 if use_tls and port not in (25,):
                     try:
@@ -396,6 +398,42 @@ def _send_password_reset_email(to_addr: str, username: str, token: str) -> bool:
             "发件人 PASSWORD_RESET_SMTP_FROM 与 SMTP 登录邮箱不一致被拒、PUBLIC_APP_URL 错误不影响投递但链接会无效。"
         )
         return False
+
+
+def _deliver_password_reset_notification(username: str, token: str, user_email: str) -> None:
+    """
+    在 HTTP 响应返回后执行：发 SMTP 或在终端打印令牌。
+    避免同步阻塞请求线程导致网关超时（502）。
+    """
+    mailed = False
+    addr = (user_email or "").strip()
+    mail_skip_reason = ""
+    if not addr:
+        mail_skip_reason = (
+            "该账号在数据库中未绑定邮箱（users.email 为空）。"
+            "旧账号需补邮箱后才能收信：在 backend 目录执行 "
+            "`python set_user_email.py 你的用户名 你的邮箱`，或重新注册并填写邮箱。"
+        )
+    elif not _smtp_configured():
+        mail_skip_reason = (
+            "后端未配置发信（缺少环境变量 PASSWORD_RESET_SMTP_HOST 等），未尝试连接 SMTP。"
+            "请在 .env 中配置 SMTP 后重启后端。"
+        )
+    else:
+        mailed = _send_password_reset_email(addr, username, token)
+        if not mailed:
+            mail_skip_reason = (
+                "已尝试 SMTP 但发送未成功。请向上滚动终端，查找以 [PASSWORD_RESET] SMTP 发送失败 开头的报错；"
+                "常见为授权码错误、端口与加密方式不匹配（587+STARTTLS / 465+SSL）、发件人 PASSWORD_RESET_SMTP_FROM 与登录邮箱不一致。"
+            )
+
+    if not mailed:
+        _log_reset_to_console(username, token, mail_skip_reason)
+    else:
+        print(
+            f"[PASSWORD_RESET] 找回密码流程：已向用户登记邮箱发送重置信 username={username!r} "
+            f"recipient={addr!r}（请在该邮箱查收，不是别的 QQ 号）"
+        )
 
 
 def _log_reset_to_console(username: str, token: str, mail_skip_reason: str = "") -> None:
@@ -1429,7 +1467,12 @@ FORGOT_PASSWORD_PUBLIC_MESSAGE = {
 
 
 @app.post("/forgot-password")
-async def forgot_password(body: ForgotPasswordBody, request: Request, db: Session = Depends(get_db)):
+async def forgot_password(
+    body: ForgotPasswordBody,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """
     签发短时重置令牌：绝不把明文令牌放进 HTTP 响应。
     - 已绑定邮箱且配置 SMTP：尝试发邮件（链接指向前端 PUBLIC_APP_URL）。
@@ -1448,35 +1491,9 @@ async def forgot_password(body: ForgotPasswordBody, request: Request, db: Sessio
     db.add(PasswordResetTokenDB(user_id=user.id, token_hash=token_hash, expires_at=expires_at))
     db.commit()
 
-    mailed = False
-    addr = (user.email or "").strip()
-    mail_skip_reason = ""
-    if not addr:
-        mail_skip_reason = (
-            "该账号在数据库中未绑定邮箱（users.email 为空）。"
-            "旧账号需补邮箱后才能收信：在 backend 目录执行 "
-            "`python set_user_email.py 你的用户名 你的邮箱`，或重新注册并填写邮箱。"
-        )
-    elif not _smtp_configured():
-        mail_skip_reason = (
-            "后端未配置发信（缺少环境变量 PASSWORD_RESET_SMTP_HOST 等），未尝试连接 SMTP。"
-            "请在 .env 中配置 SMTP 后重启后端。"
-        )
-    else:
-        mailed = _send_password_reset_email(addr, user.username, token)
-        if not mailed:
-            mail_skip_reason = (
-                "已尝试 SMTP 但发送未成功。请向上滚动终端，查找以 [PASSWORD_RESET] SMTP 发送失败 开头的报错；"
-                "常见为授权码错误、端口与加密方式不匹配（587+STARTTLS / 465+SSL）、发件人 PASSWORD_RESET_SMTP_FROM 与登录邮箱不一致。"
-            )
-
-    if not mailed:
-        _log_reset_to_console(user.username, token, mail_skip_reason)
-    else:
-        print(
-            f"[PASSWORD_RESET] 找回密码流程：已向用户登记邮箱发送重置信 username={user.username!r} "
-            f"recipient={addr!r}（请在该邮箱查收，不是别的 QQ 号）"
-        )
+    snap_username = user.username
+    snap_email = user.email or ""
+    background_tasks.add_task(_deliver_password_reset_notification, snap_username, token, snap_email)
 
     return FORGOT_PASSWORD_PUBLIC_MESSAGE
 

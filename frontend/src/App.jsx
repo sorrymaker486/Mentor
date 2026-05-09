@@ -405,16 +405,31 @@ const LoginView = ({ onLoginSuccess }) => {
           setAuthStep('register');
         }
       } else if (authStep === 'forgot') {
-        const response = await fetch(`${API_BASE}/forgot-password`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: cleanUsername }),
-        });
+        const ac = new AbortController();
+        const tid = setTimeout(() => ac.abort(), 45000);
+        let response;
+        try {
+          response = await fetch(`${API_BASE}/forgot-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: cleanUsername }),
+            signal: ac.signal,
+          });
+        } finally {
+          clearTimeout(tid);
+        }
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
           const detail = formatApiDetail(data);
           if (response.status === 429) {
             setErrorMsg(detail || '请求过于频繁，请稍后再试');
+            triggerShake();
+            return;
+          }
+          if (response.status === 502 || response.status === 503 || response.status === 504) {
+            setErrorMsg(
+              '网关或服务暂时不可用（502/503/504）。常见于托管实例休眠、重启或请求超时。请隔一分钟再试；若静态资源也同时报错，请到 Render 面板查看服务是否在线与日志。'
+            );
             triggerShake();
             return;
           }
@@ -489,7 +504,11 @@ const LoginView = ({ onLoginSuccess }) => {
         }
       }
     } catch (e) {
-      setErrorMsg('服务连接失败');
+      if (e?.name === 'AbortError') {
+        setErrorMsg('请求超时，请检查网络或稍后再试');
+      } else {
+        setErrorMsg('服务连接失败');
+      }
       triggerShake();
     } finally {
       setLoading(false);
