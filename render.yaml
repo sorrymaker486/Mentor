@@ -1,9 +1,10 @@
 # Render Blueprint：Dashboard → New → Blueprint → 连接 GitHub 仓库并选择本文件。
-# 首次部署后在 Dashboard → Environment 手动填写（或使用 sync: false 在创建时录入）：
+# 首次部署后在 Dashboard → Environment 填写：
 #   PUBLIC_APP_URL = https://<你的服务名>.onrender.com
 #   API_KEY 或 OPENAI_API_KEY（AI 功能必填）
-# 可选持久化 SQLite：Web Service → Disks → 添加挂载路径 /var/data，
-#   再添加环境变量 DATABASE_URL = sqlite:////var/data/users.db（四个斜杠表示绝对路径）。
+#   DATABASE_URL = 托管 Postgres 连接串（推荐：New Postgres → 复制 Internal/External URL）
+#     代码会将 postgres:// 转为 postgresql+psycopg://；亦可使用 Neon/Supabase 连接串。
+# 可选 SQLite + 持久盘：Disks 挂载 /var/data → DATABASE_URL=sqlite:////var/data/users.db
 services:
   - type: web
     name: mentor

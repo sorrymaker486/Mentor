@@ -106,12 +106,28 @@ class StripApiPrefixMiddleware(BaseHTTPMiddleware):
 # ----------------------------
 # 数据库配置
 # ----------------------------
-# 默认 SQLite 写在 backend 工作目录；Render 等可设 DATABASE_URL=sqlite:////var/data/users.db 指向挂载盘
+def _normalize_database_url(url: str) -> str:
+    """统一 Postgres 连接串：兼容 Render 的 postgres://，并默认使用 psycopg v3 驱动。"""
+    u = url.strip()
+    if u.startswith("postgres://"):
+        u = "postgresql://" + u[len("postgres://") :]
+    if u.startswith("postgresql://"):
+        return "postgresql+psycopg://" + u[len("postgresql://") :]
+    return u
+
+
+# 默认 SQLite 写在 backend 工作目录。
+# 线上托管 Postgres：DATABASE_URL=postgresql://...（Neon/Supabase/Render Postgres 控制台复制）
+# SQLite 持久盘：DATABASE_URL=sqlite:////var/data/users.db
 _raw_db_url = os.getenv("DATABASE_URL", "").strip()
-SQLALCHEMY_DATABASE_URL = _raw_db_url if _raw_db_url else "sqlite:///./users.db"
+SQLALCHEMY_DATABASE_URL = (
+    _normalize_database_url(_raw_db_url) if _raw_db_url else "sqlite:///./users.db"
+)
 _engine_kwargs: Dict[str, Any] = {}
 if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
     _engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    _engine_kwargs["pool_pre_ping"] = True
 engine = create_engine(SQLALCHEMY_DATABASE_URL, **_engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -233,6 +249,9 @@ class PasswordResetTokenDB(Base):
 # --- 初始化与工具 ---
 def ensure_schema():
     Base.metadata.create_all(bind=engine)
+    # 以下 ALTER 仅针对旧版 SQLite 库；Postgres 由 create_all 一次性建全表
+    if engine.dialect.name != "sqlite":
+        return
     inspector = inspect(engine)
     if "chat_sessions" in inspector.get_table_names():
         existing_cols = {c["name"] for c in inspector.get_columns("chat_sessions")}
