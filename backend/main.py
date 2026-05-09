@@ -99,10 +99,13 @@ class StripApiPrefixMiddleware(BaseHTTPMiddleware):
 # ----------------------------
 # 数据库配置
 # ----------------------------
-SQLALCHEMY_DATABASE_URL = "sqlite:///./users.db"
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
+# 默认 SQLite 写在 backend 工作目录；Render 等可设 DATABASE_URL=sqlite:////var/data/users.db 指向挂载盘
+_raw_db_url = os.getenv("DATABASE_URL", "").strip()
+SQLALCHEMY_DATABASE_URL = _raw_db_url if _raw_db_url else "sqlite:///./users.db"
+_engine_kwargs: Dict[str, Any] = {}
+if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+engine = create_engine(SQLALCHEMY_DATABASE_URL, **_engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 class Base(DeclarativeBase):

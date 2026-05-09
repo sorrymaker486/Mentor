@@ -1,15 +1,16 @@
-# Render Blueprint：Dashboard → New → Blueprint → 指向本仓库根目录 render.yaml
-# 部署前在 Render 控制台为 Web Service 配置：
-#   API_KEY / OPENAI_API_KEY（AI 功能必填）
-#   PUBLIC_APP_URL（填 Render 给你的 https 域名，用于邮件里的重置链接）
-#   SMTP 相关变量（可选，找回密码发信）
-# SQLite 文件在免费实例上可能随重启丢失；需要持久化请为该服务挂载 Disk 并将工作目录指向磁盘路径。
+# Render Blueprint：Dashboard → New → Blueprint → 连接 GitHub 仓库并选择本文件。
+# 首次部署后在 Dashboard → Environment 手动填写（或使用 sync: false 在创建时录入）：
+#   PUBLIC_APP_URL = https://<你的服务名>.onrender.com
+#   API_KEY 或 OPENAI_API_KEY（AI 功能必填）
+# 可选持久化 SQLite：Web Service → Disks → 添加挂载路径 /var/data，
+#   再添加环境变量 DATABASE_URL = sqlite:////var/data/users.db（四个斜杠表示绝对路径）。
 services:
   - type: web
     name: mentor
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
+    healthCheckPath: /
     envVars:
       - key: STATIC_ROOT
         value: /app/static
@@ -18,4 +19,6 @@ services:
       - key: PUBLIC_APP_URL
         sync: false
       - key: API_KEY
+        sync: false
+      - key: DATABASE_URL
         sync: false
