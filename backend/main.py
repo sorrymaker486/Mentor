@@ -384,6 +384,8 @@ def _send_password_reset_resend(to_addr: str, username: str, token: str) -> bool
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            # Resend 经 Cloudflare：无 User-Agent 会返回 403 error code 1010
+            "User-Agent": "Mentor-Academic-Suite/1.0 (+https://resend.com/docs)",
         },
         method="POST",
     )
