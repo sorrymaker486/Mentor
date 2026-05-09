@@ -1828,7 +1828,10 @@ def learning_catalog(subject: str = Query(..., min_length=1), db: Session = Depe
 async def get_sessions(username: str, subject: str, db: Session = Depends(get_db)):
     db_user = db.query(UserDB).filter(UserDB.username == username).first()
     if not db_user:
-        raise HTTPException(status_code=404, detail="用户不存在")
+        raise HTTPException(
+            status_code=404,
+            detail="用户不存在：请在本网站重新注册并登录。公网实例数据库若未挂载持久盘，服务重启后账号会丢失，需重新注册。",
+        )
     sessions = db.query(ChatSessionDB).filter(
         ChatSessionDB.user_id == db_user.id,
         ChatSessionDB.subject == subject
@@ -2598,7 +2601,10 @@ def ask_ai(
 ):
     db_user = db.query(UserDB).filter(UserDB.username == username).first()
     if not db_user:
-        raise HTTPException(status_code=404, detail="用户不存在")
+        raise HTTPException(
+            status_code=404,
+            detail="用户不存在：请在本网站重新注册并登录。公网实例数据库若未挂载持久盘，服务重启后账号会丢失，需重新注册。",
+        )
     q = (question or "").strip()
     if not q:
         raise HTTPException(status_code=400, detail="问题不能为空")
@@ -2620,7 +2626,10 @@ def ask_ai(
 def ask_ai_post(body: AskPostBody, db: Session = Depends(get_db)):
     db_user = db.query(UserDB).filter(UserDB.username == body.username).first()
     if not db_user:
-        raise HTTPException(status_code=404, detail="用户不存在")
+        raise HTTPException(
+            status_code=404,
+            detail="用户不存在：请在本网站重新注册并登录。公网实例数据库若未挂载持久盘，服务重启后账号会丢失，需重新注册。",
+        )
 
     imgs = normalize_ask_image_payload(body.images)
 
