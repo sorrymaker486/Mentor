@@ -2,8 +2,7 @@ import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
+import { markdownRemarkPlugins, markdownRehypePlugins } from '../markdownMathSetup';
 import 'katex/dist/katex.min.css';
 
 /** 与主对话区 AI 气泡内相同的数学预处理 */
@@ -75,8 +74,8 @@ export default function ChatLikeMarkdown({ content, className = '' }) {
       className={`chat-prose prose prose-sm max-w-none prose-neutral text-[#1a1f24] break-words [word-break:break-word] [overflow-wrap:anywhere] prose-img:max-w-full ${className}`}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        remarkPlugins={markdownRemarkPlugins}
+        rehypePlugins={markdownRehypePlugins}
         components={{
           code({ inline, className, children }) {
             const match = /language-(\w+)/.exec(className || '');

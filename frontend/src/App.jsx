@@ -2,8 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
+import { markdownRemarkPlugins, markdownRehypePlugins } from './markdownMathSetup';
 import HeroTitle from './components/hero-motion/HeroTitle';
 import ParticleField from './components/ParticleField';
 import IntroLoader from './components/IntroLoader';
@@ -162,8 +161,8 @@ const UserMessageBody = ({ content }) => {
       {text ? (
         <div className="prose prose-sm max-w-none prose-invert">
           <ReactMarkdown
-            remarkPlugins={[remarkMath]}
-            rehypePlugins={[rehypeKatex]}
+            remarkPlugins={markdownRemarkPlugins}
+            rehypePlugins={markdownRehypePlugins}
             components={{
               code({ inline, className, children }) {
                 const match = /language-(\w+)/.exec(className || '');
@@ -1204,15 +1203,22 @@ const ChatView = ({ subject, username, onBack }) => {
     }
 
     try {
-      const url = `${API_BASE}/history/${sessionId}`;
-      const response = await fetch(url);
-      const data = await response.json().catch(() => []);
+      let data = [];
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const url = `${API_BASE}/history/${sessionId}`;
+        const response = await fetch(url);
+        const parsed = await response.json().catch(() => []);
 
-      if (!response.ok) {
-        throw new Error(data?.detail || '历史记录加载失败');
+        if (!response.ok) {
+          throw new Error(parsed?.detail || '历史记录加载失败');
+        }
+
+        data = Array.isArray(parsed) ? parsed : [];
+        if (data.length > 0) break;
+        await new Promise((r) => setTimeout(r, 100));
       }
 
-      if (Array.isArray(data) && data.length > 0) {
+      if (data.length > 0) {
         setMessages(data);
       } else {
         setMessages([welcomeMessage]);
@@ -1357,9 +1363,8 @@ const ChatView = ({ subject, username, onBack }) => {
         applySessionChapter(matched.chapter);
       }
       loadSessionHistory(currentSessionId);
-    } else {
-      setMessages([welcomeMessage]);
     }
+    /* 若列表尚未含当前 id（例如刚创建带学会话），勿清空消息，避免打断流式输出 */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSessionId, catalog]);
 
@@ -1413,14 +1418,14 @@ const ChatView = ({ subject, username, onBack }) => {
         throw new Error(detail || `HTTP ${r.status}`);
       }
       const returnedSessionId = r.headers.get('X-Session-Id');
-      if (returnedSessionId) {
-        const numericId = Number(returnedSessionId);
-        if (!Number.isNaN(numericId)) setCurrentSessionId(numericId);
-      }
       startRenderLoop();
       await pumpStream(r);
       finalizeAssistantStream({ stripLearnMeta: false });
       await loadSessions();
+      if (returnedSessionId) {
+        const numericId = Number(returnedSessionId);
+        if (!Number.isNaN(numericId)) setCurrentSessionId(numericId);
+      }
       await loadLearningProgress();
     } catch (e) {
       console.error(e);
@@ -1799,12 +1804,6 @@ const ChatView = ({ subject, username, onBack }) => {
       }
 
       const returnedSessionId = response.headers.get('X-Session-Id');
-      if (returnedSessionId) {
-        const numericId = Number(returnedSessionId);
-        if (!Number.isNaN(numericId)) {
-          setCurrentSessionId(numericId);
-        }
-      }
 
       if (!response.body) {
         throw new Error('没有可读取的响应流');
@@ -1818,7 +1817,8 @@ const ChatView = ({ subject, username, onBack }) => {
       markSectionVisited(sessionScopeKey);
 
       if (returnedSessionId) {
-        await loadSessionHistory(Number(returnedSessionId));
+        const numericId = Number(returnedSessionId);
+        if (!Number.isNaN(numericId)) setCurrentSessionId(numericId);
       } else if (currentSessionId) {
         await loadSessionHistory(currentSessionId);
       }
@@ -2028,8 +2028,8 @@ const ChatView = ({ subject, username, onBack }) => {
                   ) : (
                     <div className="prose prose-sm max-w-none prose-neutral">
                       <ReactMarkdown
-                        remarkPlugins={[remarkMath]}
-                        rehypePlugins={[rehypeKatex]}
+                        remarkPlugins={markdownRemarkPlugins}
+                        rehypePlugins={markdownRehypePlugins}
                         components={{
                           code({ inline, className, children }) {
                             const match = /language-(\w+)/.exec(className || '');
