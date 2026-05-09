@@ -1,0 +1,1356 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  /* 中文大标题偏企业站衬线；拉丁副标题仍可用 Cormorant */
+  --font-display: "Noto Serif SC", "Cormorant Garamond", ui-serif, Georgia, serif;
+}
+
+/* --- Property Agent 浅色企业站：色彩与动效 --- */
+:root {
+  --pa-cream: #f6f4ef;
+  --pa-cream-deep: #ebe6dc;
+  --pa-ink: #1a1f24;
+  --pa-muted: rgba(26, 31, 36, 0.52);
+  --pa-gold: #b8955c;
+  --pa-gold-soft: rgba(184, 149, 92, 0.22);
+}
+
+/* 单屏应用：整页不滚动（内层区域可单独滚动并隐藏滚动条） */
+html,
+body,
+#root {
+  height: 100%;
+  max-height: 100dvh;
+  overflow: hidden;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--pa-cream);
+  color: var(--pa-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.scrollbar-hide {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* 极浅纸质噪点（企业站留白上的细腻质感） */
+.pa-grain {
+  position: relative;
+}
+.pa-grain::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  opacity: 0.035;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* 区块浮现：参考 PA 首屏与各 Section 的柔和显现 */
+.reveal-on-scroll {
+  opacity: 0;
+  transform: translateY(32px);
+  filter: blur(1.5px);
+  transition:
+    opacity 1.05s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 1.05s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 1.05s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.reveal-on-scroll.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  filter: blur(0);
+}
+
+/* 科目看板：短过渡、无 blur（避免滚动时卡顿与「出来太慢」） */
+.reveal-on-scroll.reveal-on-scroll--snappy {
+  transform: translateY(14px);
+  filter: none;
+  transition:
+    opacity 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.38s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.reveal-on-scroll.reveal-on-scroll--snappy.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* 小标签：英日企业站常见的宽字距 */
+.pa-label {
+  letter-spacing: 0.38em;
+  text-transform: uppercase;
+}
+
+/* Scroll Down 竖线动画（PA 首屏常见） */
+@keyframes pa-scroll-line {
+  0% {
+    transform: scaleY(0);
+    transform-origin: top;
+  }
+  42% {
+    transform: scaleY(1);
+    transform-origin: top;
+  }
+  58% {
+    transform: scaleY(1);
+    transform-origin: bottom;
+  }
+  100% {
+    transform: scaleY(0);
+    transform-origin: bottom;
+  }
+}
+.pa-scroll-indicator::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(to bottom, transparent, var(--pa-gold), transparent);
+  animation: pa-scroll-line 2.6s ease-in-out infinite;
+}
+
+/* 背景光斑缓慢呼吸 */
+@keyframes pa-breathe {
+  0%,
+  100% {
+    transform: scale(1) translate3d(0, 0, 0);
+    opacity: 0.32;
+  }
+  50% {
+    transform: scale(1.12) translate3d(1%, -1%, 0);
+    opacity: 0.48;
+  }
+}
+.pa-orb {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(72px);
+  animation: pa-breathe 14s ease-in-out infinite;
+}
+.pa-orb-2 {
+  animation-delay: -7s;
+}
+
+/* 首屏装饰线展开 */
+@keyframes pa-line-in {
+  from {
+    transform: scaleX(0);
+    opacity: 0;
+  }
+  to {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+}
+.pa-line-in {
+  transform-origin: left;
+  animation: pa-line-in 1.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes fadeSlide {
+  from {
+    opacity: 0;
+    transform: translateY(26px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 标题分层入场（PA 大标题 + 副文案节奏） */
+.hero-stagger > * {
+  opacity: 0;
+  animation: fadeSlide 1.15s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.hero-stagger > *:nth-child(1) {
+  animation-delay: 0.08s;
+}
+.hero-stagger > *:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.hero-stagger > *:nth-child(3) {
+  animation-delay: 0.34s;
+}
+.hero-stagger > *:nth-child(4) {
+  animation-delay: 0.48s;
+}
+.hero-stagger > *:nth-child(5) {
+  animation-delay: 0.6s;
+}
+
+/* 背景极慢视差漂移（仅装饰层） */
+@keyframes pa-drift {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(-1.5%, 1.2%, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+.pa-drift-slow {
+  animation: pa-drift 28s ease-in-out infinite;
+}
+
+.apple-spring {
+  transition: all 0.5s cubic-bezier(0.3, 1.5, 0.5, 1);
+}
+
+.apple-spring:active {
+  transform: scale(0.95);
+  transition-duration: 0.1s;
+}
+
+.glass-header {
+  background-color: rgba(246, 244, 239, 0.78) !important;
+  backdrop-filter: blur(20px) saturate(165%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(165%) !important;
+  border-bottom: 1px solid rgba(26, 31, 36, 0.06);
+}
+
+@keyframes shimmer {
+  0% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.72;
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 3s infinite ease-in-out;
+}
+
+.bg-glow {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: -1;
+  background:
+    radial-gradient(at 0% 0%, var(--pa-gold-soft) 0px, transparent 48%),
+    radial-gradient(at 100% 30%, rgba(26, 31, 36, 0.04) 0px, transparent 45%);
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-6px);
+  }
+  40% {
+    transform: translateX(6px);
+  }
+  60% {
+    transform: translateX(-4px);
+  }
+  80% {
+    transform: translateX(4px);
+  }
+}
+
+.chat-prose.prose-invert {
+  --tw-prose-body: rgba(255, 255, 255, 0.92);
+}
+
+/* 工作室弹窗内 Markdown：避免长公式/代码撑破窄栏 */
+.studio-md-scroll {
+  min-width: 0;
+  max-width: 100%;
+}
+.studio-md-scroll .chat-prose {
+  overflow-x: auto;
+}
+.studio-md-scroll .chat-prose pre {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Mermaid 导图挂载点：避免 flex 子项把 SVG 压成 0 宽 */
+.mmd-host svg {
+  display: block;
+  max-width: 100%;
+  width: auto;
+  height: auto;
+}
+
+/* 浅色侧栏滚动条 */
+.scrollbar-pa::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.scrollbar-pa::-webkit-scrollbar-thumb {
+  background: rgba(26, 31, 36, 0.12);
+  border-radius: 999px;
+}
+.scrollbar-pa::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ========== PA 式字体动效（参考 propertyagent 首屏/区块文案节奏） ========== */
+@keyframes pa-display-rise {
+  from {
+    opacity: 0;
+    transform: translateY(22px);
+    filter: blur(5px);
+    letter-spacing: 0.08em;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+    letter-spacing: normal;
+  }
+}
+
+@keyframes pa-body-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes pa-char-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 0.22em, 0);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    filter: blur(0);
+  }
+}
+
+.pa-char-line {
+  font-feature-settings: "kern" 1;
+}
+.pa-char-line .pa-char {
+  display: inline-block;
+  opacity: 0;
+  animation: pa-char-in 0.62s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pa-char-line .pa-char {
+    opacity: 1;
+    animation: none;
+  }
+  .pa-motion-display,
+  .pa-motion-body,
+  .pa-motion-ui,
+  .pa-serif-breathe {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pa-motion-display {
+    animation: pa-display-rise 1.05s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .pa-motion-body {
+    animation: pa-body-rise 0.88s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .pa-motion-ui {
+    animation: pa-body-rise 0.72s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .pa-serif-breathe {
+    animation: pa-serif-soft 6.5s ease-in-out infinite;
+    animation-delay: 0.9s;
+  }
+}
+
+@keyframes pa-serif-soft {
+  0%,
+  100% {
+    font-weight: 500;
+    opacity: 1;
+  }
+  50% {
+    font-weight: 600;
+    opacity: 0.96;
+  }
+}
+
+/* --- PA News 左侧大标题：遮罩内上抬 reveal（参考 propertyagent News 区块） --- */
+@keyframes pa-mask-rise {
+  from {
+    transform: translate3d(0, 108%, 0);
+    opacity: 0.98;
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
+  }
+}
+
+/* 遮罩行：中文需更大行高，否则 overflow:hidden 会裁切笔画与标点 */
+.pa-mask-news .pa-mask-line {
+  overflow: hidden;
+}
+.pa-mask-news .pa-mask-line-en {
+  line-height: 1.06;
+  padding-bottom: 0.08em;
+}
+.pa-mask-news .pa-mask-line-zh {
+  line-height: 1.32;
+  padding-bottom: 0.1em;
+}
+.pa-mask-news .pa-mask-inner {
+  display: block;
+  transform: translate3d(0, 108%, 0);
+  will-change: transform;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.pa-mask-news.is-ready .pa-mask-inner {
+  animation: pa-mask-rise 1.05s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.pa-mask-news.is-ready .pa-mask-line:nth-child(1) .pa-mask-inner {
+  animation-delay: 0.06s;
+}
+.pa-mask-news.is-ready .pa-mask-line:nth-child(2) .pa-mask-inner {
+  animation-delay: 0.2s;
+}
+.pa-mask-news.is-ready .pa-mask-line:nth-child(3) .pa-mask-inner {
+  animation-delay: 0.34s;
+}
+.pa-mask-news.is-ready .pa-mask-line:nth-child(4) .pa-mask-inner {
+  animation-delay: 0.48s;
+}
+
+.pa-mask-sans {
+  font-family: var(--font-sans);
+  font-weight: 300;
+  font-size: clamp(2.25rem, min(8dvh, 11vw), 4.5rem);
+  letter-spacing: -0.03em;
+  color: var(--pa-ink);
+}
+.pa-mask-serif {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(1rem, min(2.9dvh, 4.2vw), 1.55rem);
+  letter-spacing: 0.02em;
+  color: #5c4a32;
+}
+.pa-mask-line-zh + .pa-mask-line-zh .pa-mask-serif {
+  color: #8a6f42;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pa-mask-news .pa-mask-inner {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+  .pa-mask-news .pa-mask-line::after {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+  .pa-mask-heading-shell::before,
+  .pa-mask-heading-shell::after {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+  .pa-mask-heading-shell .pa-mask-side-line::after,
+  .pa-mask-grid-lines,
+  .pa-curve-field-light::before,
+  .pa-service-dark-panel::after {
+    animation: none !important;
+  }
+  .pa-mask-heading-shell .pa-mask-side-line::after {
+    opacity: 0 !important;
+  }
+  .pa-mask-grid-lines {
+    opacity: 0 !important;
+  }
+}
+
+/* 参考 PA：标题区域周边细线扫光（非整站网格，仅标题壳层） */
+.pa-mask-heading-shell {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0.45rem 0.35rem 0.55rem 0;
+  margin-left: -2px;
+  isolation: isolate;
+}
+.pa-mask-news {
+  min-width: 0;
+  max-width: 100%;
+  position: relative;
+  z-index: 1;
+}
+.pa-mask-grid-lines {
+  position: absolute;
+  inset: 0.2rem 0 0.2rem 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(to right, rgba(184, 149, 92, 0.22) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(184, 149, 92, 0.16) 1px, transparent 1px);
+  background-size: 64px 100%, 100% 26px;
+  animation: pa-mask-grid-drift-once 4.6s linear both forwards;
+}
+.pa-mask-news .pa-mask-line {
+  position: relative;
+}
+.pa-mask-news .pa-mask-line::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 52%;
+  height: 2px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(184, 149, 92, 0.25) 22%,
+    rgba(184, 149, 92, 0.62) 50%,
+    rgba(184, 149, 92, 0.25) 78%,
+    transparent 100%
+  );
+  background-size: 28% 100%;
+  background-repeat: no-repeat;
+  animation: pa-line-accent-sweep-once 3.2s linear both forwards;
+}
+.pa-mask-news .pa-mask-line:nth-child(2)::after {
+  animation-delay: 0.5s;
+}
+.pa-mask-news .pa-mask-line:nth-child(3)::after {
+  animation-delay: 0.95s;
+}
+.pa-mask-news .pa-mask-line:nth-child(4)::after {
+  animation-delay: 1.4s;
+}
+.pa-mask-heading-shell::before,
+.pa-mask-heading-shell::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(184, 149, 92, 0.08) 20%,
+    rgba(184, 149, 92, 0.55) 50%,
+    rgba(184, 149, 92, 0.08) 80%,
+    transparent 100%
+  );
+  background-size: 45% 100%;
+  background-repeat: no-repeat;
+  animation: pa-title-line-sweep-once 2.8s linear both forwards;
+}
+.pa-mask-heading-shell::before {
+  top: 0;
+}
+.pa-mask-heading-shell::after {
+  bottom: 0;
+  animation-delay: 0.2s;
+}
+
+@keyframes pa-title-line-sweep-once {
+  0% {
+    background-position: -35% 0;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  78% {
+    opacity: 1;
+  }
+  100% {
+    background-position: 135% 0;
+    opacity: 0;
+  }
+}
+
+.pa-mask-heading-shell .pa-mask-side-line {
+  position: absolute;
+  top: 0.25rem;
+  bottom: 0.35rem;
+  left: -1px;
+  width: 1px;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: 1px;
+}
+.pa-mask-heading-shell .pa-mask-side-line::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 38%;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(184, 149, 92, 0.45),
+    rgba(26, 31, 36, 0.2),
+    transparent
+  );
+  animation: pa-title-line-v-once 2.2s linear both forwards;
+}
+
+.pa-mask-heading-shell.is-dark::before,
+.pa-mask-heading-shell.is-dark::after {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(212, 188, 136, 0.12) 20%,
+    rgba(212, 188, 136, 0.8) 50%,
+    rgba(212, 188, 136, 0.12) 80%,
+    transparent 100%
+  );
+}
+.pa-mask-heading-shell.is-dark .pa-mask-grid-lines {
+  animation-name: pa-mask-grid-drift-once-dark;
+  background-image:
+    linear-gradient(to right, rgba(212, 188, 136, 0.28) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(212, 188, 136, 0.2) 1px, transparent 1px);
+}
+.pa-mask-news.is-dark .pa-mask-sans {
+  color: #f4f5f7;
+}
+.pa-mask-news.is-dark .pa-mask-serif {
+  color: #d8c6a0;
+}
+.pa-mask-news.is-dark .pa-mask-line-zh + .pa-mask-line-zh .pa-mask-serif {
+  color: #f0f2f5;
+}
+.pa-mask-news.is-dark .pa-mask-line::after {
+  top: 56%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(212, 188, 136, 0.16) 22%,
+    rgba(212, 188, 136, 0.9) 50%,
+    rgba(212, 188, 136, 0.16) 78%,
+    transparent 100%
+  );
+  animation-name: pa-line-accent-sweep-once-dark;
+}
+
+/* 参考第一张图：浅色区右侧曲线线稿 */
+.pa-curve-field-light {
+  opacity: 0.46;
+}
+.pa-curve-field-light::before {
+  content: "";
+  position: absolute;
+  inset: 3% -14% 3% 28%;
+  background:
+    radial-gradient(140% 100% at 100% 50%, rgba(184, 149, 92, 0.07), transparent 70%),
+    repeating-radial-gradient(
+      ellipse at 108% 50%,
+      rgba(26, 31, 36, 0.1) 0 1px,
+      transparent 1px 17px
+    );
+  mask-image: linear-gradient(90deg, transparent 0%, rgba(0, 0, 0, 0.68) 26%, rgba(0, 0, 0, 1) 62%);
+  animation: pa-curve-drift 12s ease-in-out infinite alternate;
+}
+
+/* 参考第二张图：改为浅色企业风渐变 + 网格线漂移 */
+.pa-service-dark-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.08) 46%, transparent 74%),
+    radial-gradient(95% 90% at 12% 14%, rgba(184, 149, 92, 0.18), transparent 62%),
+    linear-gradient(120deg, #f6f3ed 0%, #eee8dd 52%, #e8e0d2 100%);
+}
+.pa-service-dark-panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.22;
+  background-image:
+    linear-gradient(to right, rgba(26, 31, 36, 0.16) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(26, 31, 36, 0.1) 1px, transparent 1px);
+  background-size: 76px 100%, 100% 38px;
+  animation: pa-grid-float 6.2s linear infinite;
+}
+.pa-service-dark-panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes pa-line-accent-sweep-once {
+  0% {
+    background-position: -32% 0;
+    opacity: 0;
+  }
+  8% {
+    opacity: 0.42;
+  }
+  78% {
+    opacity: 0.42;
+  }
+  100% {
+    background-position: 132% 0;
+    opacity: 0;
+  }
+}
+
+@keyframes pa-line-accent-sweep-once-dark {
+  0% {
+    background-position: -32% 0;
+    opacity: 0;
+  }
+  8% {
+    opacity: 0.35;
+  }
+  78% {
+    opacity: 0.35;
+  }
+  100% {
+    background-position: 132% 0;
+    opacity: 0;
+  }
+}
+
+@keyframes pa-curve-drift {
+  0% {
+    transform: translateX(0) scale(1);
+  }
+  100% {
+    transform: translateX(-14px) scale(1.015);
+  }
+}
+
+@keyframes pa-grid-float {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(38px, 0, 0);
+  }
+}
+
+@keyframes pa-mask-grid-drift-once {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0;
+  }
+  6% {
+    opacity: 0.26;
+  }
+  70% {
+    opacity: 0.26;
+  }
+  100% {
+    transform: translate3d(38px, 0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes pa-mask-grid-drift-once-dark {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0;
+  }
+  6% {
+    opacity: 0.35;
+  }
+  70% {
+    opacity: 0.35;
+  }
+  100% {
+    transform: translate3d(38px, 0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes pa-title-line-v-once {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.95;
+  }
+  72% {
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateY(220%);
+    opacity: 0;
+  }
+}
+
+@media (max-width: 1023px) {
+  .pa-curve-field-light::before {
+    inset: 8% -30% 6% 38%;
+  }
+}
+
+/* ============================================================== */
+/* ===== PA 线条效果扩展包（参考 propertyagent.co.jp 官网） ===== */
+/* ============================================================== */
+
+/* 1) 垂直扫描光束线（PA 首屏 Scroll Down 标志性元素） ------------ */
+/* 金色极细线自上而下循环扫描，尾部自然淡出                        */
+.pa-vscan {
+  position: relative;
+  width: 1px;
+  overflow: hidden;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(26, 31, 36, 0.1) 20%,
+    rgba(26, 31, 36, 0.14) 80%,
+    transparent
+  );
+}
+.pa-vscan::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(184, 149, 92, 0.15) 30%,
+    rgba(184, 149, 92, 0.9) 50%,
+    rgba(184, 149, 92, 0.15) 70%,
+    transparent 100%
+  );
+  transform: translateY(-100%);
+  animation: pa-vscan-run 3.4s cubic-bezier(0.55, 0.1, 0.45, 0.9) infinite;
+  will-change: transform;
+}
+.pa-vscan::after {
+  content: "";
+  position: absolute;
+  left: -2px;
+  right: -2px;
+  top: 50%;
+  height: 14%;
+  filter: blur(6px);
+  background: linear-gradient(to bottom, transparent, rgba(184, 149, 92, 0.55), transparent);
+  opacity: 0;
+  animation: pa-vscan-glow 3.4s cubic-bezier(0.55, 0.1, 0.45, 0.9) infinite;
+}
+@keyframes pa-vscan-run {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100%);
+  }
+}
+@keyframes pa-vscan-glow {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  45%,
+  55% {
+    opacity: 1;
+  }
+}
+
+/* 带"SCROLL"标签的完整首屏侧栏装饰（竖排字 + 光束）             */
+.pa-scroll-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  pointer-events: none;
+  z-index: 5;
+  color: rgba(26, 31, 36, 0.4);
+}
+.pa-scroll-rail .pa-scroll-label {
+  font-size: 9px;
+  letter-spacing: 0.38em;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-transform: uppercase;
+  opacity: 0.65;
+  animation: pa-body-rise 0.9s ease-out 0.6s both;
+}
+.pa-scroll-rail .pa-vscan {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 2) 四角装饰线（L 形角标，日系企业站经典元素） ----------------- */
+.pa-corners {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  --corner-size: 14px;
+  --corner-thickness: 1px;
+  --corner-color: rgba(184, 149, 92, 0.55);
+  --corner-inset: 8px;
+}
+.pa-corners::before,
+.pa-corners::after,
+.pa-corners > span::before,
+.pa-corners > span::after {
+  content: "";
+  position: absolute;
+  width: var(--corner-size);
+  height: var(--corner-size);
+  border: 0 solid var(--corner-color);
+  opacity: 0;
+  animation: pa-corner-in 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.pa-corners::before {
+  top: var(--corner-inset);
+  left: var(--corner-inset);
+  border-top-width: var(--corner-thickness);
+  border-left-width: var(--corner-thickness);
+  animation-delay: 0.1s;
+}
+.pa-corners::after {
+  top: var(--corner-inset);
+  right: var(--corner-inset);
+  border-top-width: var(--corner-thickness);
+  border-right-width: var(--corner-thickness);
+  animation-delay: 0.22s;
+}
+.pa-corners > span {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.pa-corners > span::before {
+  bottom: var(--corner-inset);
+  left: var(--corner-inset);
+  border-bottom-width: var(--corner-thickness);
+  border-left-width: var(--corner-thickness);
+  animation-delay: 0.34s;
+}
+.pa-corners > span::after {
+  bottom: var(--corner-inset);
+  right: var(--corner-inset);
+  border-bottom-width: var(--corner-thickness);
+  border-right-width: var(--corner-thickness);
+  animation-delay: 0.46s;
+}
+@keyframes pa-corner-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* hover 时角装饰加粗并发光（用于卡片）                             */
+.pa-corners-hover {
+  transition: opacity 0.5s ease;
+}
+.group:hover .pa-corners-hover {
+  --corner-color: rgba(184, 149, 92, 0.95);
+  --corner-size: 18px;
+  --corner-thickness: 1.5px;
+}
+
+/* 3) 横向分节线（从中心向两侧展开 + 光点扫过） ------------------ */
+.pa-divider {
+  position: relative;
+  width: 100%;
+  height: 1px;
+  overflow: visible;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(26, 31, 36, 0.14) 30%,
+    rgba(26, 31, 36, 0.18) 50%,
+    rgba(26, 31, 36, 0.14) 70%,
+    transparent
+  );
+  transform: scaleX(0);
+  transform-origin: center;
+  animation: pa-divider-spread 1.1s cubic-bezier(0.22, 1, 0.36, 1) 0.25s forwards;
+}
+.pa-divider::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 28%;
+  height: 3px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(184, 149, 92, 0.85),
+    transparent
+  );
+  filter: blur(0.5px);
+  animation: pa-divider-sweep 3.6s linear infinite;
+  animation-delay: 1.3s;
+}
+@keyframes pa-divider-spread {
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes pa-divider-sweep {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  20%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(380%);
+    opacity: 0;
+  }
+}
+
+/* 4) SVG 自绘边框（hover 时线条顺时针绘入） --------------------- */
+.pa-frame-svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.pa-frame-svg rect {
+  fill: none;
+  stroke: rgba(184, 149, 92, 0.7);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  transition: stroke-dashoffset 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.group:hover .pa-frame-svg rect {
+  stroke-dashoffset: 0;
+}
+
+/* 5) 斜纹背景线（Service 区块深色板参考） ----------------------- */
+.pa-diagonal-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.08;
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 14px,
+    rgba(26, 31, 36, 0.9) 14px,
+    rgba(26, 31, 36, 0.9) 15px
+  );
+  mask-image: linear-gradient(135deg, rgba(0, 0, 0, 0.9), transparent 80%);
+  animation: pa-diagonal-drift 14s linear infinite;
+}
+@keyframes pa-diagonal-drift {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 80px 0;
+  }
+}
+
+/* 6) 下划线墨迹绘入（reveal 时从左到右画出） -------------------- */
+.pa-underline-draw {
+  position: relative;
+  display: inline-block;
+}
+.pa-underline-draw::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -4px;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    var(--pa-gold),
+    rgba(184, 149, 92, 0.3) 72%,
+    transparent
+  );
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: pa-underline-in 1.1s cubic-bezier(0.22, 1, 0.36, 1) 0.4s forwards;
+}
+@keyframes pa-underline-in {
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* 7) 章节卡片左侧呼吸小点（active 状态强化） -------------------- */
+.pa-node-dot {
+  position: relative;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--pa-gold);
+}
+.pa-node-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  border: 1px solid var(--pa-gold);
+  opacity: 0;
+  animation: pa-node-pulse 2.2s ease-out infinite;
+}
+@keyframes pa-node-pulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+/* 8) 水平跑马光线（用于顶部 header 或重点分隔） ----------------- */
+.pa-hline-runner {
+  position: relative;
+  height: 1px;
+  width: 100%;
+  background: rgba(26, 31, 36, 0.06);
+  overflow: hidden;
+}
+.pa-hline-runner::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 22%;
+  height: 100%;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(184, 149, 92, 0.85),
+    transparent
+  );
+  animation: pa-hline-run 4.2s linear infinite;
+}
+@keyframes pa-hline-run {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(480%);
+  }
+}
+
+/* 科目看板：轻量漂移网格（与粒子层叠） */
+@keyframes pa-dashboard-grid-drift {
+  0% {
+    transform: translate(0, 0);
+  }
+  100% {
+    transform: translate(36px, 36px);
+  }
+}
+.pa-dashboard-bg-grid {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.65;
+  background-image:
+    linear-gradient(rgba(26, 31, 36, 0.034) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(26, 31, 36, 0.034) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(ellipse 88% 78% at 58% 42%, black 14%, transparent 70%);
+  animation: pa-dashboard-grid-drift 56s linear infinite;
+}
+
+/* 主内容区右侧淡金扫描线 */
+@keyframes pa-dashboard-edge-sweep {
+  0% {
+    transform: translateY(-12%);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.55;
+  }
+  88% {
+    opacity: 0.45;
+  }
+  100% {
+    transform: translateY(112%);
+    opacity: 0;
+  }
+}
+.pa-dashboard-edge-sheen {
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 1px;
+  height: 42%;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(184, 149, 92, 0.55),
+    rgba(212, 188, 136, 0.35),
+    transparent
+  );
+  filter: blur(0.35px);
+  animation: pa-dashboard-edge-sweep 11s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pa-vscan::before,
+  .pa-vscan::after,
+  .pa-divider,
+  .pa-divider::after,
+  .pa-frame-svg rect,
+  .pa-diagonal-lines,
+  .pa-underline-draw::after,
+  .pa-node-dot::after,
+  .pa-hline-runner::before,
+  .pa-corners::before,
+  .pa-corners::after,
+  .pa-corners > span::before,
+  .pa-corners > span::after {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+
+  .pa-dashboard-bg-grid,
+  .pa-dashboard-edge-sheen {
+    animation: none !important;
+  }
+
+  .pa-studio-weave path {
+    animation: none !important;
+    stroke-dashoffset: 0 !important;
+  }
+}
+
+/* ========== 智能工坊：叠层、流彩曲线（与主站金线体系一致） ========== */
+.pa-studio-overlay {
+  animation: pa-studio-fade-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes pa-studio-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.pa-studio-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+@keyframes pa-studio-weave-dash {
+  to {
+    stroke-dashoffset: -140;
+  }
+}
+
+.pa-studio-weave path {
+  fill: none;
+  stroke: url(#paStudioGold);
+  stroke-width: 1.15;
+  stroke-linecap: round;
+  stroke-dasharray: 10 18;
+  animation: pa-studio-weave-dash 16s linear infinite;
+  opacity: 0.85;
+}
+
+.pa-studio-weave path:nth-child(2) {
+  animation-duration: 22s;
+  animation-direction: reverse;
+  opacity: 0.65;
+}
+
+.pa-studio-weave path:nth-child(3) {
+  animation-duration: 19s;
+  opacity: 0.5;
+}
+
+/* 资源生成：阅读区舒适排版（与主站浅色纸质感一致） */
+.studio-resource-shell {
+  box-shadow:
+    0 12px 40px rgba(26, 31, 36, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.studio-resource-reader {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+.studio-resource-reader .katex-display {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  border-radius: 0.5rem;
+  background: rgba(246, 244, 239, 0.85);
+  border: 1px solid rgba(26, 31, 36, 0.06);
+}
+
+.studio-resource-reader .katex {
+  font-size: 1.05em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-resource-reader {
+    scroll-behavior: auto;
+  }
+}

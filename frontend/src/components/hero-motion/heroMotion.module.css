@@ -1,0 +1,260 @@
+.heroTitle {
+  position: relative;
+  width: min(100%, 42rem);
+  min-width: 0;
+  overflow: visible;
+  padding: 0.75rem 0.5rem 0.8rem 0.2rem;
+  isolation: isolate;
+}
+
+.content {
+  position: relative;
+  z-index: 3;
+}
+
+/* ---- titleFrame：贴合标题文字尺寸的容器（矩形参照系） ---- */
+.titleFrame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  padding: 0.55rem 0.95rem 0.6rem 0.75rem;
+  isolation: isolate;
+  /* 允许 SVG 中的入场/出场段延伸到外部 */
+  overflow: visible;
+}
+
+.titleInner {
+  position: relative;
+  z-index: 3;
+}
+
+/* ---- 文字：纯淡入，无上抬，无裁切 ---- */
+.line {
+  margin: 0;
+  opacity: 0;
+  will-change: opacity;
+}
+
+.mainLine {
+  font-family: var(--font-sans);
+  font-weight: 300;
+  font-size: clamp(2.15rem, min(8dvh, 10.6vw), 4.25rem);
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  color: var(--title-color);
+}
+
+.subLine {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(1.02rem, min(2.9dvh, 4.2vw), 1.52rem);
+  letter-spacing: 0.02em;
+  line-height: 1.32;
+  color: var(--subtitle-color);
+}
+
+.description {
+  margin-top: 0.75rem;
+  max-width: 36rem;
+  font-size: 11px;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--title-color) 48%, transparent);
+}
+
+.light .description {
+  color: rgba(26, 31, 36, 0.48);
+}
+
+.dark .description {
+  color: rgba(244, 245, 247, 0.7);
+}
+
+.ready .line {
+  animation: lineFadeIn var(--line-enter-duration) var(--line-enter-ease) forwards;
+  animation-delay: var(--line-delay);
+}
+
+@keyframes lineFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---- 背景网格 ---- */
+.gridOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.gridParallaxLayer {
+  position: absolute;
+  inset: -9%;
+  transform: translate3d(var(--parallax-x, 0px), var(--parallax-y, 0px), 0);
+  will-change: transform;
+}
+
+.gridLayer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--stroke-color) 42%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--stroke-color) 36%, transparent) 1px, transparent 1px);
+  background-size: var(--grid-gap) 100%, 100% var(--grid-gap);
+  animation: none;
+}
+
+.ready .gridLayer {
+  animation: gridFadeOnce 1.35s ease-out both forwards;
+}
+
+@keyframes gridFadeOnce {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0);
+  }
+  20% {
+    opacity: var(--grid-opacity);
+  }
+  48% {
+    opacity: var(--grid-opacity);
+    transform: translate3d(calc(var(--grid-drift-x) * 1.35), calc(var(--grid-drift-y) * 1.35), 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(calc(var(--grid-drift-x) * 2.2), calc(var(--grid-drift-y) * 2.2), 0);
+  }
+}
+
+.ready .dark .gridLayer {
+  animation-name: gridFadeOnceDark;
+}
+
+@keyframes gridFadeOnceDark {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0);
+  }
+  20% {
+    opacity: calc(var(--grid-opacity) + 0.05);
+  }
+  48% {
+    opacity: calc(var(--grid-opacity) + 0.05);
+    transform: translate3d(calc(var(--grid-drift-x) * 1.35), calc(var(--grid-drift-y) * 1.35), 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(calc(var(--grid-drift-x) * 2.2), calc(var(--grid-drift-y) * 2.2), 0);
+  }
+}
+
+/* ---- SVG 容器：铺满 titleFrame，允许路径延伸到外部 ---- */
+.strokeLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* ---- 四条边：顺时针各扫一次后消失（无停留亮线） ---- */
+.edgeTop,
+.edgeRight,
+.edgeBottom,
+.edgeLeft {
+  fill: none;
+  stroke: var(--pa-gold, #b8955c);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: round;
+  stroke-dasharray: 22 200;
+  stroke-dashoffset: 22;
+  filter: drop-shadow(0 0 3px rgba(184, 149, 92, 0.7))
+          drop-shadow(0 0 9px rgba(184, 149, 92, 0.35));
+  opacity: 0;
+}
+
+.ready .edgeTop,
+.ready .edgeRight,
+.ready .edgeBottom,
+.ready .edgeLeft {
+  animation: edgeSweepOnce 0.52s linear both forwards;
+}
+
+/* 依序上→右→下→左，衔接为一圈 */
+.ready .edgeTop {
+  animation-delay: 0.12s;
+}
+.ready .edgeRight {
+  animation-delay: 0.64s;
+}
+.ready .edgeBottom {
+  animation-delay: 1.16s;
+}
+.ready .edgeLeft {
+  animation-delay: 1.68s;
+}
+
+@keyframes edgeSweepOnce {
+  0% {
+    stroke-dashoffset: 22;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: -100;
+    opacity: 0;
+  }
+}
+
+/* ---- 移动端微调 ---- */
+@media (max-width: 768px) {
+  .heroTitle {
+    padding-top: 0.45rem;
+    --grid-drift-x: 4px;
+    --grid-drift-y: 2px;
+  }
+  .titleFrame {
+    padding: 0.4rem 0.65rem 0.45rem 0.55rem;
+  }
+}
+
+/* ---- 动画降级 ---- */
+@media (prefers-reduced-motion: reduce) {
+  .line,
+  .ready .line {
+    opacity: 1 !important;
+    animation: none !important;
+  }
+  .gridLayer,
+  .ready .gridLayer {
+    animation: none !important;
+    opacity: 0 !important;
+    transform: none !important;
+  }
+  .edgeTop,
+  .edgeRight,
+  .edgeBottom,
+  .edgeLeft,
+  .ready .edgeTop,
+  .ready .edgeRight,
+  .ready .edgeBottom,
+  .ready .edgeLeft {
+    animation: none !important;
+    opacity: 0 !important;
+    stroke-dashoffset: 22 !important;
+  }
+}

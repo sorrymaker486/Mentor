@@ -1,0 +1,132 @@
+"""多智能体协同：角色定义、资源类型编排（赛题 A3 对齐）。"""
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+# 对外展示的智能体角色（编排顺序即协同链路）
+AGENT_MANIFEST: List[Dict[str, Any]] = [
+    {
+        "id": "portrait",
+        "name": "学习画像智能体",
+        "role": "从对话与测验数据抽取 ≥6 维动态画像",
+        "inputs": ["近期对话摘要", "小节掌握度", "测验记录"],
+        "outputs": ["portrait_json"],
+    },
+    {
+        "id": "path",
+        "name": "路径规划智能体",
+        "role": "结合画像与课纲生成个性化学习路径与推送顺序",
+        "inputs": ["portrait", "章节目录", "进度"],
+        "outputs": ["learning_path_json"],
+    },
+    {
+        "id": "resource",
+        "name": "多模态资源合成智能体",
+        "role": "按类型生成讲解文档/导图/题库/拓展阅读/代码实操/视频脚本",
+        "inputs": ["课程资料摘录", "当前小节", "画像偏好"],
+        "outputs": ["markdown_or_mermaid"],
+    },
+    {
+        "id": "tutor",
+        "name": "苏格拉底导师智能体",
+        "role": "流式辅导、附图与公式讲解",
+        "inputs": ["对话历史", "资料", "用户附图"],
+        "outputs": ["stream_markdown"],
+    },
+    {
+        "id": "evaluator",
+        "name": "学习评测智能体",
+        "role": "小节测验/大章测验与掌握度更新",
+        "inputs": ["对话轮次", "作答情况"],
+        "outputs": ["quiz_json", "mastery"],
+    },
+    {
+        "id": "guard",
+        "name": "安全合规智能体",
+        "role": "输入输出策略与防幻觉约束（规则 + 提示词层）",
+        "inputs": ["用户输入", "模型草稿"],
+        "outputs": ["policy_flags"],
+    },
+]
+
+# ≥5 类个性化资源（此处 6 类）
+RESOURCE_TYPES: Dict[str, Dict[str, str]] = {
+    "course_digest": {
+        "title": "课程精讲文档",
+        "agent_chain": "guard,resource,path",
+        "instruction": (
+            "你是「课程精讲文档」智能体。请输出**仅 Markdown**（中文），结构包含："
+            "学习目标、核心概念表、关键公式（LaTeX）、例题与易错点、自测要点。"
+            "严格依据用户给出的【资料】，不得编造出处。"
+        ),
+    },
+    "mind_map": {
+        "title": "知识点思维导图",
+        "agent_chain": "guard,resource",
+        "instruction": (
+            "你是「思维导图」智能体。请输出**一段 fenced mermaid 代码块**（```mermaid … ```），"
+            "优先使用 mindmap；节点用中文短句；**严禁**在 mindmap 中出现多个并列顶层节点（会触发 "
+            "“There can be only one root”）。正确结构示例：第一级只有一个中心节点，例如 "
+            "`mindmap` 下一行缩进两格写 `root((本节标题))`，其下每一层比父级**再多两个空格**缩进，"
+            "所有分支都嵌套在该中心之下；不要用 Tab，只用空格；若层次复杂宁可加深缩进也不要回到顶层。"
+            "若 mindmap 难以表达，可改用 flowchart TD。另在代码块外用一两句话说明如何读图。仅依据【资料】。"
+            "若使用 mindmap：**含空格、括号、冒号、公式（如 J(θ)）的一行说明**必须写成 "
+            "`节点id[\"显示文本\"]`（节点 id 用英文/数字，如 n1、n2），不要把整句直接写在缩进后。"
+        ),
+    },
+    "practice_pack": {
+        "title": "混合题型练习包",
+        "agent_chain": "guard,resource,evaluator",
+        "instruction": (
+            "你是「练习命题」智能体。请输出 Markdown，内含一个 ```json 代码块```，"
+            "JSON 为数组，3~6 道题，每题含 type（single|multi）、question、options（数组）、"
+            "correct_index 或 correct_indices、explain 简短解析。难度贴合【资料】深度。"
+        ),
+    },
+    "extended_reading": {
+        "title": "拓展阅读材料",
+        "agent_chain": "guard,resource",
+        "instruction": (
+            "你是「拓展阅读」智能体。请输出**仅 Markdown 中文正文**，必须紧扣【当前范围】与【资料】里的概念、方法、符号或应用场景展开，"
+            "推荐 2~4 条延伸方向；每条含小标题、与正课对齐的阐述（每条约 180～280 字）、与本节知识点的具体衔接。"
+            "**禁止**用通用搜索引擎检索页、百科/课程平台首页、泛化「去搜索」话术代替实质内容；**不要**输出以检索关键词拼接的网址或明显占位链接。"
+            "若【资料】中确有可核对的书名、章节名、论文题目、标准术语，可写清「建议查阅的实体对象」；无明确外链时只写概念脉络与关键词，**不得编造 URL 或 DOI**。"
+            "文末务必增加一个小节，标题固定为「### 相关延伸链接」，下列 2～4 行，每行一条 Markdown 链接 `[可读标题](https://…)`，"
+            "链接须指向**与本节知识点直接相关的**具体文档/论文/手册页（含明确路径），**禁止**搜索页、站点首页或泛检索链接。"
+        ),
+    },
+    "code_lab": {
+        "title": "代码实操案例",
+        "agent_chain": "guard,resource",
+        "instruction": (
+            "你是「代码实操」智能体。必须输出**标准 Markdown 正文**（## 小标题 + 段落），**禁止**用整段 JSON、"
+            "禁止输出 `json { ... }` 或非围栏的伪 JSON 串代替正文。"
+            "结构须包含：任务描述、环境假设、分步思路、完整可运行示例代码（使用 ```python 或相应语言的 fenced code）、常见错误与调试提示。"
+            "代码须与【资料】主题一致，勿引入无关大型依赖。"
+        ),
+    },
+    "video_script": {
+        "title": "微课视频脚本",
+        "agent_chain": "guard,resource",
+        "instruction": (
+            "你是「微课脚本」智能体。输出 Markdown 分镜表：镜号、画面/板书要点、口播稿（中文）、"
+            "时长建议（秒）。节奏适合 3~6 分钟微课；依据【资料】。"
+        ),
+    },
+}
+
+PORTRAIT_DIMENSION_KEYS = [
+    "知识基础",
+    "认知风格",
+    "学习目标对齐度",
+    "易错点偏好",
+    "学习节奏",
+    "兴趣与拓展倾向",
+]
+
+
+def default_portrait() -> Dict[str, Any]:
+    out: Dict[str, Any] = {"version": 1, "dimensions": {}, "summary": "画像待更新：完成若干轮对话或点击「刷新画像」。"}
+    for k in PORTRAIT_DIMENSION_KEYS:
+        out["dimensions"][k] = {"score": 0.5, "note": "待评估"}
+    return out

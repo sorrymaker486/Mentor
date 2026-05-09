@@ -1,0 +1,12 @@
+{
+  "name": "csoftcup-project",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n web,api -c blue,green \"npm run dev --prefix frontend\" \"backend\\\\venv\\\\Scripts\\\\python.exe backend\\\\run_dev.py\"",
+    "build": "npm run build --prefix frontend",
+    "preview": "npm run preview --prefix frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
