@@ -43,7 +43,9 @@ from safety import (
 )
 from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from passlib.context import CryptContext
@@ -60,6 +62,39 @@ from sqlalchemy.orm import (
 
 # 始终从 backend 目录加载 .env（避免从仓库根目录启动时读不到配置）
 load_dotenv(Path(__file__).resolve().parent / ".env")
+
+
+def static_site_dir() -> Optional[Path]:
+    """生产环境指向 Vite 构建产物目录（内含 index.html 与 assets/）。"""
+    raw = os.getenv("STATIC_ROOT", "").strip()
+    if not raw:
+        return None
+    p = Path(raw).resolve()
+    return p if p.is_dir() else None
+
+
+def strip_api_prefix_enabled() -> bool:
+    """浏览器请求 /api/... 时剥离前缀，与同域部署的前端默认 API_BASE=/api 对齐。"""
+    v = os.getenv("STRIP_API_PREFIX", "").strip().lower()
+    if v in ("0", "false", "no"):
+        return False
+    if v in ("1", "true", "yes"):
+        return True
+    return bool(os.getenv("STATIC_ROOT", "").strip())
+
+
+class StripApiPrefixMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if strip_api_prefix_enabled():
+            path = request.scope.get("path") or ""
+            if path.startswith("/api"):
+                tail = path[4:]
+                rest = tail.lstrip("/")
+                new_path = f"/{rest}" if rest else "/"
+                request.scope["path"] = new_path
+                request.scope["raw_path"] = new_path.encode("utf-8")
+        return await call_next(request)
+
 
 # ----------------------------
 # 数据库配置
@@ -1054,6 +1089,13 @@ def _all_sections_quiz_passed(db: Session, user_id: int, subject: str, chapter_i
 async def _app_lifespan(_app: FastAPI):
     """每次进程启动（含 --reload 子进程）再跑一次建表，并在控制台标明关键路由已注册。"""
     ensure_schema()
+    db = SessionLocal()
+    try:
+        if db.query(CourseDB).count() == 0:
+            seed_courses(db)
+            print("[mentor-backend] 空库：已自动导入课程数据（等价于访问一次 /seed）")
+    finally:
+        db.close()
     print(
         "[mentor-backend] 已就绪: POST /forgot-password, POST /reset-password "
         "（若前端仍 404，请确认浏览器请求的是本机 8001 且仅保留一个后端进程）"
@@ -1072,11 +1114,17 @@ app.add_middleware(
     allow_methods=["*"],
     expose_headers=["X-Session-Id"],
 )
+app.add_middleware(StripApiPrefixMiddleware)
 
 
 @app.get("/")
 async def api_root():
-    """确认当前进程是否为本项目后端（若此处非 JSON，说明 8001 上不是本服务）。"""
+    """静态站点模式下返回前端首页；否则返回 JSON 服务说明。"""
+    sd = static_site_dir()
+    if sd is not None:
+        index = sd / "index.html"
+        if index.is_file():
+            return FileResponse(index)
     return {
         "service": "mentor-backend",
         "version": 1,
@@ -2565,3 +2613,21 @@ def ask_ai_post(body: AskPostBody, db: Session = Depends(get_db)):
         section_id=body.section_id,
         session_id=body.session_id,
     )
+
+
+_sd_root = static_site_dir()
+if _sd_root is not None:
+    _assets_dir = _sd_root / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="mentor_assets")
+
+    def _public_file_handler(path: Path):
+        async def _send() -> FileResponse:
+            return FileResponse(path)
+
+        return _send
+
+    for _name in ("favicon.svg", "icons.svg"):
+        _p = _sd_root / _name
+        if _p.is_file():
+            app.add_api_route(f"/{_name}", _public_file_handler(_p), methods=["GET"])

@@ -1,0 +1,21 @@
+# Render Blueprint：Dashboard → New → Blueprint → 指向本仓库根目录 render.yaml
+# 部署前在 Render 控制台为 Web Service 配置：
+#   API_KEY / OPENAI_API_KEY（AI 功能必填）
+#   PUBLIC_APP_URL（填 Render 给你的 https 域名，用于邮件里的重置链接）
+#   SMTP 相关变量（可选，找回密码发信）
+# SQLite 文件在免费实例上可能随重启丢失；需要持久化请为该服务挂载 Disk 并将工作目录指向磁盘路径。
+services:
+  - type: web
+    name: mentor
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: STATIC_ROOT
+        value: /app/static
+      - key: STRIP_API_PREFIX
+        value: "1"
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: API_KEY
+        sync: false

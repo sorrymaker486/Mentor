@@ -1,0 +1,12 @@
+**/node_modules
+**/venv
+**/__pycache__
+.git
+.gitignore
+*.md
+.env
+**/.env
+backend/users.db
+frontend/dist
+.cursor
+**/.idea
