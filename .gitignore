@@ -15,6 +15,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+render.deploy.env
 
 # Local DB (dev)
 backend/users.db
