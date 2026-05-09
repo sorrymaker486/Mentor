@@ -1824,11 +1824,15 @@ const ChatView = ({ subject, username, onBack }) => {
       }
     } catch (e) {
       console.error(e);
+      const hint =
+        e instanceof Error && e.message?.trim()
+          ? `抱歉，对话暂时失败：${e.message.trim()}`
+          : '抱歉，当前服务暂时不可用。';
       setMessages((prev) => {
         const updated = [...prev];
         const lastIndex = updated.length - 1;
         if (lastIndex >= 0 && updated[lastIndex].role === 'assistant' && !updated[lastIndex].content) {
-          updated[lastIndex] = { ...updated[lastIndex], content: '抱歉，当前服务暂时不可用。' };
+          updated[lastIndex] = { ...updated[lastIndex], content: hint };
         }
         return updated;
       });
