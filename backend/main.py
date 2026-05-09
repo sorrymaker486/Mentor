@@ -16,6 +16,8 @@ from time import time
 from typing import List, cast, Optional, Any, Dict
 from pathlib import Path
 from urllib.parse import urlencode
+import urllib.error
+import urllib.request
 
 from dotenv import load_dotenv
 
@@ -320,6 +322,79 @@ def _smtp_configured() -> bool:
     return bool(os.getenv("PASSWORD_RESET_SMTP_HOST", "").strip())
 
 
+def _resend_configured() -> bool:
+    return bool(os.getenv("PASSWORD_RESET_RESEND_API_KEY", "").strip())
+
+
+def _send_password_reset_resend(to_addr: str, username: str, token: str) -> bool:
+    """经 Resend HTTPS API 发信（适合 Render 等屏蔽出站 SMTP 的环境）。"""
+    api_key = os.getenv("PASSWORD_RESET_RESEND_API_KEY", "").strip()
+    from_addr = os.getenv("PASSWORD_RESET_RESEND_FROM", "").strip()
+    if not api_key:
+        return False
+    if not from_addr:
+        print(
+            "[PASSWORD_RESET] Resend：已设置 PASSWORD_RESET_RESEND_API_KEY，"
+            "但未设置 PASSWORD_RESET_RESEND_FROM（须在 Resend 控制台验证过的发件地址）。"
+        )
+        return False
+    link = _magic_reset_url(username, token)
+    plain = (
+        f"您好，{username}\n\n"
+        f"您正在重置 Mentor 账户密码。请在浏览器中打开以下链接（20 分钟内有效，仅可使用一次）：\n\n"
+        f"{link}\n\n"
+        f"若收件箱没有本邮件，请到垃圾箱查找。\n\n"
+        f"若不是你本人操作，请忽略本邮件。\n"
+    )
+    html = (
+        f"<p>您好，{username}</p>"
+        f"<p>您正在重置 Mentor 账户密码。请点击下方链接（20 分钟内有效，仅可使用一次）：</p>"
+        f'<p><a href="{link}">{link}</a></p>'
+        f"<p>若收件箱没有本邮件，请到垃圾箱查找。</p>"
+        f"<p>若不是你本人操作，请忽略本邮件。</p>"
+    )
+    payload = json.dumps(
+        {
+            "from": from_addr,
+            "to": [to_addr],
+            "subject": "【Mentor】密码重置验证",
+            "text": plain,
+            "html": html,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=22) as resp:
+            _ = resp.read()
+            if 200 <= int(resp.status) < 300:
+                print(
+                    f"[PASSWORD_RESET] Resend 已受理投递：收件人={to_addr!r}，发件人={from_addr!r}。"
+                    "若收件箱未见到，请到 Resend 控制台查看投递记录与退信原因。"
+                )
+                return True
+            print(f"[PASSWORD_RESET] Resend 意外状态码: {resp.status}")
+            return False
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:800]
+        print(
+            f"[PASSWORD_RESET] Resend HTTP {exc.code}: {detail}\n"
+            "  请到 https://resend.com/docs 核对 API Key、发件域名验证与收件人限制。"
+        )
+        return False
+    except Exception as exc:
+        print(f"[PASSWORD_RESET] Resend 请求失败: {exc}")
+        return False
+
+
 def _smtp_prefer_ipv4() -> bool:
     return os.getenv("PASSWORD_RESET_SMTP_PREFER_IPV4", "1").strip().lower() not in (
         "0",
@@ -461,8 +536,7 @@ def _send_password_reset_email(to_addr: str, username: str, token: str) -> bool:
 
 def _deliver_password_reset_notification(username: str, token: str, user_email: str) -> None:
     """
-    在 HTTP 响应返回后执行：发 SMTP 或在终端打印令牌。
-    避免同步阻塞请求线程导致网关超时（502）。
+    在 HTTP 响应返回后执行：优先 Resend（HTTPS），否则 SMTP，否则控制台打印令牌。
     """
     mailed = False
     addr = (user_email or "").strip()
@@ -473,17 +547,25 @@ def _deliver_password_reset_notification(username: str, token: str, user_email: 
             "旧账号需补邮箱后才能收信：在 backend 目录执行 "
             "`python set_user_email.py 你的用户名 你的邮箱`，或重新注册并填写邮箱。"
         )
+    elif _resend_configured():
+        mailed = _send_password_reset_resend(addr, username, token)
+        if not mailed:
+            mail_skip_reason = (
+                "Resend API 发送未成功。请向上滚动日志查看 [PASSWORD_RESET] Resend 开头的报错；"
+                "并确认 PASSWORD_RESET_RESEND_FROM 已在 Resend 验证、收件邮箱未被沙箱策略拦截。"
+            )
     elif not _smtp_configured():
         mail_skip_reason = (
-            "后端未配置发信（缺少环境变量 PASSWORD_RESET_SMTP_HOST 等），未尝试连接 SMTP。"
-            "请在 .env 中配置 SMTP 后重启后端。"
+            "后端未配置邮件投递：请设置 PASSWORD_RESET_RESEND_API_KEY + PASSWORD_RESET_RESEND_FROM（推荐，走 HTTPS），"
+            "或配置 PASSWORD_RESET_SMTP_*（部分云平台禁止出站 SMTP）。"
         )
     else:
         mailed = _send_password_reset_email(addr, username, token)
         if not mailed:
             mail_skip_reason = (
-                "已尝试 SMTP 但发送未成功。请向上滚动终端，查找以 [PASSWORD_RESET] SMTP 发送失败 开头的报错；"
-                "常见为授权码错误、端口与加密方式不匹配（587+STARTTLS / 465+SSL）、发件人 PASSWORD_RESET_SMTP_FROM 与登录邮箱不一致。"
+                "已尝试 SMTP 但发送未成功。Render 等环境常屏蔽 SMTP 出站，请改用 Resend："
+                "设置 PASSWORD_RESET_RESEND_API_KEY 与 PASSWORD_RESET_RESEND_FROM。"
+                "亦可向上滚动终端查找 [PASSWORD_RESET] SMTP 报错详情。"
             )
 
     if not mailed:
