@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 backend/venv/
+backend/.venv/
 
 # Build / cache
 frontend/dist/

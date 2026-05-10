@@ -1,0 +1,2 @@
+# Minimal deps to run test_resend_local.py (loads .env). Full backend needs requirements.txt.
+python-dotenv>=1.0,<2
