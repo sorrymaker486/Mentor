@@ -332,10 +332,31 @@ def _strip_env_secret(val: str) -> str:
 
 def _resend_api_key() -> str:
     """兼容 Render 上误用 Resend 文档里的变量名 RESEND_API_KEY。"""
-    raw = _strip_env_secret(os.getenv("PASSWORD_RESET_RESEND_API_KEY", "")) or _strip_env_secret(
-        os.getenv("RESEND_API_KEY", "")
-    )
-    return raw
+    pr = _strip_env_secret(os.getenv("PASSWORD_RESET_RESEND_API_KEY", ""))
+    rr = _strip_env_secret(os.getenv("RESEND_API_KEY", ""))
+    return pr or rr
+
+
+def _resend_env_diag_line() -> str:
+    """401 排障用：不打印密钥，只描述长度、前缀与变量冲突。"""
+    pr = _strip_env_secret(os.getenv("PASSWORD_RESET_RESEND_API_KEY", ""))
+    rr = _strip_env_secret(os.getenv("RESEND_API_KEY", ""))
+    bits = []
+    if pr:
+        bits.append(
+            f"PASSWORD_RESET_RESEND_API_KEY 已设置(len={len(pr)},re_前缀={'是' if pr.startswith('re_') else '否'})"
+        )
+    else:
+        bits.append("PASSWORD_RESET_RESEND_API_KEY 未设置")
+    if rr:
+        bits.append(f"RESEND_API_KEY 已设置(len={len(rr)},re_前缀={'是' if rr.startswith('re_') else '否'})")
+    else:
+        bits.append("RESEND_API_KEY 未设置")
+    if pr and rr and pr != rr:
+        bits.append("警告：两变量均非空且不一致，代码优先使用 PASSWORD_RESET_RESEND_API_KEY（请删错的那份或改成一致）")
+    use = "PASSWORD_RESET_RESEND_API_KEY" if pr else ("RESEND_API_KEY" if rr else "（无）")
+    bits.append(f"实际选用：{use}")
+    return " ".join(bits)
 
 
 def _resend_from_header() -> str:
@@ -414,6 +435,8 @@ def _send_password_reset_resend(to_addr: str, username: str, token: str) -> bool
             f"[PASSWORD_RESET] Resend HTTP {exc.code}: {detail}\n"
             "  请到 https://resend.com/docs 核对 API Key、发件域名验证与收件人限制。"
         )
+        if exc.code == 401:
+            print(f"  [PASSWORD_RESET] Resend 401 排障：{_resend_env_diag_line()}")
         return False
     except Exception as exc:
         print(f"[PASSWORD_RESET] Resend 请求失败: {exc}")
