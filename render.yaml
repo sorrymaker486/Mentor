@@ -23,6 +23,10 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: PASSWORD_RESET_SENDGRID_API_KEY
+        sync: false
+      - key: PASSWORD_RESET_SENDGRID_FROM
+        sync: false
       - key: PASSWORD_RESET_RESEND_API_KEY
         sync: false
       - key: PASSWORD_RESET_RESEND_FROM

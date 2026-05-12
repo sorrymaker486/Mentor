@@ -12,6 +12,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from email.message import EmailMessage
+from email.utils import parseaddr
 from time import time
 from typing import List, cast, Optional, Any, Dict
 from pathlib import Path
@@ -338,6 +339,103 @@ def _strip_env_secret(val: str) -> str:
     return s
 
 
+def _sendgrid_api_key() -> str:
+    return _strip_env_secret(os.getenv("PASSWORD_RESET_SENDGRID_API_KEY", "")) or _strip_env_secret(
+        os.getenv("SENDGRID_API_KEY", "")
+    )
+
+
+def _sendgrid_from_header() -> str:
+    return _strip_env_secret(os.getenv("PASSWORD_RESET_SENDGRID_FROM", "")) or _strip_env_secret(
+        os.getenv("SENDGRID_FROM", "")
+    )
+
+
+def _sendgrid_configured() -> bool:
+    return bool(_sendgrid_api_key())
+
+
+def _sendgrid_data_residency() -> str:
+    return (
+        _strip_env_secret(os.getenv("PASSWORD_RESET_SENDGRID_DATA_RESIDENCY", ""))
+        or _strip_env_secret(os.getenv("SENDGRID_DATA_RESIDENCY", ""))
+    ).lower()
+
+
+def _send_password_reset_sendgrid(to_addr: str, username: str, token: str) -> bool:
+    """Send password-reset email via Twilio SendGrid HTTPS API."""
+    api_key = _sendgrid_api_key()
+    from_addr = _sendgrid_from_header()
+    if not api_key:
+        return False
+    if not from_addr:
+        print(
+            "[PASSWORD_RESET] SendGrid: API key is configured, "
+            "but PASSWORD_RESET_SENDGRID_FROM or SENDGRID_FROM is missing."
+        )
+        return False
+
+    from_name, from_email = parseaddr(from_addr)
+    if not from_email:
+        print(f"[PASSWORD_RESET] SendGrid: invalid sender address {from_addr!r}.")
+        return False
+
+    link = _magic_reset_url(username, token)
+    plain = (
+        f"您好，{username}\n\n"
+        f"您正在重置 Mentor 账户密码。请在浏览器中打开以下链接（20 分钟内有效，仅可使用一次）：\n\n"
+        f"{link}\n\n"
+        f"若收件箱没有本邮件，请到垃圾箱查找。\n\n"
+        f"若不是你本人操作，请忽略本邮件。\n"
+    )
+    html = (
+        f"<p>您好，{username}</p>"
+        f"<p>您正在重置 Mentor 账户密码。请点击下方链接（20 分钟内有效，仅可使用一次）：</p>"
+        f'<p><a href="{link}">{link}</a></p>'
+        f"<p>若收件箱没有本邮件，请到垃圾箱查找。</p>"
+        f"<p>若不是你本人操作，请忽略本邮件。</p>"
+    )
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Email, Mail
+    except ImportError:
+        print("[PASSWORD_RESET] SendGrid package is not installed. Add sendgrid to requirements.txt.")
+        return False
+
+    try:
+        from_email_obj = Email(from_email, from_name or None)
+        message = Mail(
+            from_email=from_email_obj,
+            to_emails=to_addr,
+            subject="【Mentor】密码重置验证",
+            plain_text_content=plain,
+            html_content=html,
+        )
+        sg = SendGridAPIClient(api_key)
+        if _sendgrid_data_residency() == "eu":
+            set_region = getattr(sg, "set_sendgrid_data_residency", None)
+            if callable(set_region):
+                set_region("eu")
+        response = sg.send(message)
+        status = int(getattr(response, "status_code", 0) or 0)
+        if 200 <= status < 300:
+            print(
+                f"[PASSWORD_RESET] SendGrid accepted reset email: status={status}, "
+                f"recipient={to_addr!r}, sender={from_addr!r}."
+            )
+            return True
+        body = getattr(response, "body", b"")
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", errors="replace")
+        print(f"[PASSWORD_RESET] SendGrid HTTP {status}: {str(body)[:800]}")
+        return False
+    except Exception as exc:
+        detail = getattr(exc, "body", None) or getattr(exc, "message", None) or str(exc)
+        print(f"[PASSWORD_RESET] SendGrid request failed: {detail}")
+        return False
+
+
 def _resend_api_key() -> str:
     """兼容 Render 上误用 Resend 文档里的变量名 RESEND_API_KEY。"""
     pr = _strip_env_secret(os.getenv("PASSWORD_RESET_RESEND_API_KEY", ""))
@@ -624,7 +722,7 @@ def _send_password_reset_email(to_addr: str, username: str, token: str) -> bool:
 
 def _deliver_password_reset_notification(username: str, token: str, user_email: str) -> None:
     """
-    在 HTTP 响应返回后执行：优先 Resend（HTTPS），否则 SMTP，否则控制台打印令牌。
+    在 HTTP 响应返回后执行：优先 SendGrid（HTTPS），然后 Resend（HTTPS），否则 SMTP，否则控制台打印令牌。
     """
     mailed = False
     addr = (user_email or "").strip()
@@ -635,6 +733,22 @@ def _deliver_password_reset_notification(username: str, token: str, user_email: 
             "旧账号需补邮箱后才能收信：在 backend 目录执行 "
             "`python set_user_email.py 你的用户名 你的邮箱`，或重新注册并填写邮箱。"
         )
+    elif _sendgrid_configured():
+        mailed = _send_password_reset_sendgrid(addr, username, token)
+        if not mailed:
+            if _resend_configured():
+                print("[PASSWORD_RESET] SendGrid failed; falling back to Resend.")
+                mailed = _send_password_reset_resend(addr, username, token)
+            if not mailed and _smtp_configured():
+                print("[PASSWORD_RESET] SendGrid failed; falling back to SMTP.")
+                mailed = _send_password_reset_email(addr, username, token)
+            if not mailed:
+                mail_skip_reason = (
+                    "SendGrid API 发送未成功。请查看 [PASSWORD_RESET] SendGrid 开头的日志；"
+                    "确认 PASSWORD_RESET_SENDGRID_API_KEY 有 Mail Send 权限，"
+                    "且 PASSWORD_RESET_SENDGRID_FROM 已完成 Single Sender Verification。"
+                    "如果已配置 Resend 或 SMTP，也请查看对应 [PASSWORD_RESET] 报错。"
+                )
     elif _resend_configured():
         mailed = _send_password_reset_resend(addr, username, token)
         if not mailed:
@@ -649,16 +763,17 @@ def _deliver_password_reset_notification(username: str, token: str, user_email: 
                 )
     elif not _smtp_configured():
         mail_skip_reason = (
-            "后端未配置邮件投递：请设置 PASSWORD_RESET_RESEND_API_KEY 或 RESEND_API_KEY，"
-            "以及 PASSWORD_RESET_RESEND_FROM 或 RESEND_FROM（推荐走 HTTPS）；"
+            "后端未配置邮件投递：请设置 PASSWORD_RESET_SENDGRID_API_KEY 或 SENDGRID_API_KEY，"
+            "以及 PASSWORD_RESET_SENDGRID_FROM 或 SENDGRID_FROM（推荐走 HTTPS）；"
+            "也可设置 PASSWORD_RESET_RESEND_API_KEY / RESEND_API_KEY 与对应 FROM；"
             "或配置 PASSWORD_RESET_SMTP_*（部分云平台禁止出站 SMTP）。"
         )
     else:
         mailed = _send_password_reset_email(addr, username, token)
         if not mailed:
             mail_skip_reason = (
-                "已尝试 SMTP 但发送未成功。Render 等环境常屏蔽 SMTP 出站，请改用 Resend："
-                "设置 PASSWORD_RESET_RESEND_API_KEY（或 RESEND_API_KEY）与 PASSWORD_RESET_RESEND_FROM（或 RESEND_FROM）。"
+                "已尝试 SMTP 但发送未成功。Railway/Render 等环境常限制 SMTP 出站，请改用 SendGrid HTTPS API："
+                "设置 PASSWORD_RESET_SENDGRID_API_KEY（或 SENDGRID_API_KEY）与 PASSWORD_RESET_SENDGRID_FROM（或 SENDGRID_FROM）。"
                 "亦可向上滚动终端查找 [PASSWORD_RESET] SMTP 报错详情。"
             )
 
