@@ -23,6 +23,14 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: PASSWORD_RESET_GMAIL_CLIENT_ID
+        sync: false
+      - key: PASSWORD_RESET_GMAIL_CLIENT_SECRET
+        sync: false
+      - key: PASSWORD_RESET_GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: PASSWORD_RESET_GMAIL_FROM
+        sync: false
       - key: PASSWORD_RESET_SENDGRID_API_KEY
         sync: false
       - key: PASSWORD_RESET_SENDGRID_FROM

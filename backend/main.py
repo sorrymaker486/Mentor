@@ -339,6 +339,104 @@ def _strip_env_secret(val: str) -> str:
     return s
 
 
+def _gmail_env(name: str) -> str:
+    return _strip_env_secret(os.getenv(f"PASSWORD_RESET_GMAIL_{name}", "")) or _strip_env_secret(
+        os.getenv(f"GMAIL_{name}", "")
+    )
+
+
+def _gmail_configured() -> bool:
+    return bool(_gmail_env("CLIENT_ID") and _gmail_env("CLIENT_SECRET") and _gmail_env("REFRESH_TOKEN"))
+
+
+def _gmail_from_header() -> str:
+    return _gmail_env("FROM")
+
+
+def _gmail_access_token() -> str:
+    data = urlencode(
+        {
+            "client_id": _gmail_env("CLIENT_ID"),
+            "client_secret": _gmail_env("CLIENT_SECRET"),
+            "refresh_token": _gmail_env("REFRESH_TOKEN"),
+            "grant_type": "refresh_token",
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        "https://oauth2.googleapis.com/token",
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    token = str(payload.get("access_token") or "")
+    if not token:
+        raise RuntimeError("Google OAuth token response did not include access_token")
+    return token
+
+
+def _send_password_reset_gmail(to_addr: str, username: str, token: str) -> bool:
+    """Send password-reset email through the Gmail API over HTTPS."""
+    if not _gmail_configured():
+        return False
+    from_addr = _gmail_from_header()
+    if not from_addr:
+        print("[PASSWORD_RESET] Gmail API: PASSWORD_RESET_GMAIL_FROM or GMAIL_FROM is missing.")
+        return False
+
+    link = _magic_reset_url(username, token)
+    plain = (
+        f"您好，{username}\n\n"
+        f"您正在重置 Mentor 账户密码。请在浏览器中打开以下链接（20 分钟内有效，仅可使用一次）：\n\n"
+        f"{link}\n\n"
+        f"若收件箱没有本邮件，请到垃圾箱查找。\n\n"
+        f"若不是你本人操作，请忽略本邮件。\n"
+    )
+    html = (
+        f"<p>您好，{username}</p>"
+        f"<p>您正在重置 Mentor 账户密码。请点击下方链接（20 分钟内有效，仅可使用一次）：</p>"
+        f'<p><a href="{link}">{link}</a></p>'
+        f"<p>若收件箱没有本邮件，请到垃圾箱查找。</p>"
+        f"<p>若不是你本人操作，请忽略本邮件。</p>"
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = "【Mentor】密码重置验证"
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg["Reply-To"] = from_addr
+    msg.set_content(plain)
+    msg.add_alternative(html, subtype="html")
+
+    try:
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+        access_token = _gmail_access_token()
+        req = urllib.request.Request(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            data=json.dumps({"raw": raw}).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            payload = json.loads(resp.read().decode("utf-8") or "{}")
+        print(
+            f"[PASSWORD_RESET] Gmail API accepted reset email: id={payload.get('id')!r}, "
+            f"recipient={to_addr!r}, sender={from_addr!r}."
+        )
+        return True
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:800]
+        print(f"[PASSWORD_RESET] Gmail API HTTP {exc.code}: {detail}")
+        return False
+    except Exception as exc:
+        print(f"[PASSWORD_RESET] Gmail API request failed: {exc}")
+        return False
+
+
 def _sendgrid_api_key() -> str:
     return _strip_env_secret(os.getenv("PASSWORD_RESET_SENDGRID_API_KEY", "")) or _strip_env_secret(
         os.getenv("SENDGRID_API_KEY", "")
@@ -722,7 +820,7 @@ def _send_password_reset_email(to_addr: str, username: str, token: str) -> bool:
 
 def _deliver_password_reset_notification(username: str, token: str, user_email: str) -> None:
     """
-    在 HTTP 响应返回后执行：优先 SendGrid（HTTPS），然后 Resend（HTTPS），否则 SMTP，否则控制台打印令牌。
+    在 HTTP 响应返回后执行：优先 Gmail API（HTTPS），然后 SendGrid/Resend（HTTPS），否则 SMTP，否则控制台打印令牌。
     """
     mailed = False
     addr = (user_email or "").strip()
@@ -733,6 +831,25 @@ def _deliver_password_reset_notification(username: str, token: str, user_email: 
             "旧账号需补邮箱后才能收信：在 backend 目录执行 "
             "`python set_user_email.py 你的用户名 你的邮箱`，或重新注册并填写邮箱。"
         )
+    elif _gmail_configured():
+        mailed = _send_password_reset_gmail(addr, username, token)
+        if not mailed:
+            if _sendgrid_configured():
+                print("[PASSWORD_RESET] Gmail API failed; falling back to SendGrid.")
+                mailed = _send_password_reset_sendgrid(addr, username, token)
+            if not mailed and _resend_configured():
+                print("[PASSWORD_RESET] Gmail API failed; falling back to Resend.")
+                mailed = _send_password_reset_resend(addr, username, token)
+            if not mailed and _smtp_configured():
+                print("[PASSWORD_RESET] Gmail API failed; falling back to SMTP.")
+                mailed = _send_password_reset_email(addr, username, token)
+            if not mailed:
+                mail_skip_reason = (
+                    "Gmail API 发送未成功。请查看 [PASSWORD_RESET] Gmail API 开头的日志；"
+                    "确认 PASSWORD_RESET_GMAIL_CLIENT_ID、PASSWORD_RESET_GMAIL_CLIENT_SECRET、"
+                    "PASSWORD_RESET_GMAIL_REFRESH_TOKEN 与 PASSWORD_RESET_GMAIL_FROM 已正确配置。"
+                    "如果已配置 SendGrid、Resend 或 SMTP，也请查看对应 [PASSWORD_RESET] 报错。"
+                )
     elif _sendgrid_configured():
         mailed = _send_password_reset_sendgrid(addr, username, token)
         if not mailed:
@@ -763,8 +880,9 @@ def _deliver_password_reset_notification(username: str, token: str, user_email: 
                 )
     elif not _smtp_configured():
         mail_skip_reason = (
-            "后端未配置邮件投递：请设置 PASSWORD_RESET_SENDGRID_API_KEY 或 SENDGRID_API_KEY，"
-            "以及 PASSWORD_RESET_SENDGRID_FROM 或 SENDGRID_FROM（推荐走 HTTPS）；"
+            "后端未配置邮件投递：请优先设置 PASSWORD_RESET_GMAIL_CLIENT_ID、"
+            "PASSWORD_RESET_GMAIL_CLIENT_SECRET、PASSWORD_RESET_GMAIL_REFRESH_TOKEN 与 PASSWORD_RESET_GMAIL_FROM；"
+            "也可设置 PASSWORD_RESET_SENDGRID_API_KEY / SENDGRID_API_KEY 与对应 FROM；"
             "也可设置 PASSWORD_RESET_RESEND_API_KEY / RESEND_API_KEY 与对应 FROM；"
             "或配置 PASSWORD_RESET_SMTP_*（部分云平台禁止出站 SMTP）。"
         )
