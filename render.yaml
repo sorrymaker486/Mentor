@@ -23,3 +23,19 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: PASSWORD_RESET_RESEND_API_KEY
+        sync: false
+      - key: PASSWORD_RESET_RESEND_FROM
+        sync: false
+      - key: PASSWORD_RESET_RESEND_USE_SDK
+        value: "1"
+      - key: PASSWORD_RESET_SMTP_HOST
+        sync: false
+      - key: PASSWORD_RESET_SMTP_PORT
+        sync: false
+      - key: PASSWORD_RESET_SMTP_USER
+        sync: false
+      - key: PASSWORD_RESET_SMTP_PASSWORD
+        sync: false
+      - key: PASSWORD_RESET_SMTP_FROM
+        sync: false

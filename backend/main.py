@@ -397,16 +397,48 @@ def _send_password_reset_resend(to_addr: str, username: str, token: str) -> bool
         f"<p>若收件箱没有本邮件，请到垃圾箱查找。</p>"
         f"<p>若不是你本人操作，请忽略本邮件。</p>"
     )
-    payload = json.dumps(
-        {
-            "from": from_addr,
-            "to": [to_addr],
-            "subject": "【Mentor】密码重置验证",
-            "text": plain,
-            "html": html,
-        },
-        ensure_ascii=False,
-    ).encode("utf-8")
+    send_params = {
+        "from": from_addr,
+        "to": [to_addr],
+        "subject": "【Mentor】密码重置验证",
+        "text": plain,
+        "html": html,
+    }
+
+    use_sdk = os.getenv("PASSWORD_RESET_RESEND_USE_SDK", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+    if use_sdk:
+        try:
+            import resend
+            from resend.exceptions import ResendError
+        except ImportError:
+            pass
+        else:
+            try:
+                resend.api_key = api_key
+                out = resend.Emails.send(send_params)
+                eid = getattr(out, "id", None)
+                print(
+                    f"[PASSWORD_RESET] Resend SDK 已受理投递：id={eid!r}，收件人={to_addr!r}，发件人={from_addr!r}。"
+                    "若收件箱未见到，请到 Resend 控制台查看投递记录与退信原因。"
+                )
+                return True
+            except ResendError as exc:
+                code_s = str(exc.code)
+                print(
+                    f"[PASSWORD_RESET] Resend SDK HTTP {exc.code}: {exc.message} ({exc.error_type})\n"
+                    "  请到 https://resend.com/docs 核对 API Key、发件域名验证与收件人限制。"
+                )
+                if code_s == "401":
+                    print(f"  [PASSWORD_RESET] Resend 401 排障：{_resend_env_diag_line()}")
+                return False
+            except Exception as exc:
+                print(f"[PASSWORD_RESET] Resend SDK 异常，回退 urllib：{exc}")
+
+    payload = json.dumps(send_params, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         "https://api.resend.com/emails",
         data=payload,
@@ -598,10 +630,15 @@ def _deliver_password_reset_notification(username: str, token: str, user_email: 
     elif _resend_configured():
         mailed = _send_password_reset_resend(addr, username, token)
         if not mailed:
-            mail_skip_reason = (
-                "Resend API 发送未成功。请向上滚动日志查看 [PASSWORD_RESET] Resend 开头的报错；"
-                "并确认 PASSWORD_RESET_RESEND_FROM 已在 Resend 验证、收件邮箱未被沙箱策略拦截。"
-            )
+            if _smtp_configured():
+                print("[PASSWORD_RESET] Resend failed; falling back to SMTP.")
+                mailed = _send_password_reset_email(addr, username, token)
+            if not mailed:
+                mail_skip_reason = (
+                    "Resend API 发送未成功。请向上滚动日志查看 [PASSWORD_RESET] Resend 开头的报错；"
+                    "并确认 PASSWORD_RESET_RESEND_FROM 已在 Resend 验证、收件邮箱未被沙箱策略拦截。"
+                    "如果已配置 SMTP，也请查看 [PASSWORD_RESET] SMTP 报错。"
+                )
     elif not _smtp_configured():
         mail_skip_reason = (
             "后端未配置邮件投递：请设置 PASSWORD_RESET_RESEND_API_KEY 或 RESEND_API_KEY，"
