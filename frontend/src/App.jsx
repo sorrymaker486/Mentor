@@ -301,10 +301,12 @@ const LoginView = ({ onLoginSuccess }) => {
     const cleanPassword = password.trim();
     const cleanConfirm = confirmPassword.trim();
     const cleanToken = resetToken.trim();
+    const cleanRegEmail = regEmail.trim();
 
     const usernameRegex = /^[a-zA-Z0-9_]{3,16}$/;
     /* 注册 / 重置：仅大小写字母与数字，且须同时含大写、小写、数字；6-20 位 */
     const passwordRegisterRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z0-9]{6,20}$/;
+    const emailRegex = /^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/;
 
     if (authStep === 'check') {
       if (!cleanUsername) {
@@ -373,6 +375,16 @@ const LoginView = ({ onLoginSuccess }) => {
       }
       if (authStep === 'register' && !passwordRegisterRegex.test(cleanPassword)) {
         setErrorMsg('密码须为 6-20 位，只能包含大小写字母与数字，且需同时含有大写、小写与数字');
+        triggerShake();
+        return;
+      }
+      if (authStep === 'register' && !cleanRegEmail) {
+        setErrorMsg('请填写邮箱，用于找回密码');
+        triggerShake();
+        return;
+      }
+      if (authStep === 'register' && !emailRegex.test(cleanRegEmail)) {
+        setErrorMsg('邮箱格式不正确');
         triggerShake();
         return;
       }
@@ -485,7 +497,7 @@ const LoginView = ({ onLoginSuccess }) => {
             ? {
                 username: cleanUsername,
                 password: cleanPassword,
-                ...(regEmail.trim() ? { email: regEmail.trim() } : {}),
+                email: cleanRegEmail,
               }
             : { username: cleanUsername, password: cleanPassword };
         const response = await fetch(url, {
@@ -680,11 +692,12 @@ const LoginView = ({ onLoginSuccess }) => {
                 {authStep === 'register' && (
                   <div>
                     <label className="mb-2 block text-[10px] pa-label text-[#1a1f24]/35 pa-motion-body">
-                      Email（可选，用于找回密码）
+                      Email（必填，用于找回密码）
                     </label>
                     <input
                       type="email"
                       autoComplete="email"
+                      required
                       placeholder="name@example.com"
                       value={regEmail}
                       onChange={(e) => {

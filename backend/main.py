@@ -1586,13 +1586,11 @@ _EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 class UserRegister(BaseModel):
     username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
     password: str = Field(..., min_length=6, max_length=20)
-    email: Optional[str] = Field(None, max_length=255)
+    email: str = Field(..., min_length=5, max_length=255)
 
     @field_validator("email")
     @classmethod
-    def optional_email(cls, v: Optional[str]) -> Optional[str]:
-        if v is None or not str(v).strip():
-            return None
+    def required_email(cls, v: str) -> str:
         s = str(v).strip()
         if not _EMAIL_RE.fullmatch(s):
             raise ValueError("邮箱格式不正确")
