@@ -310,7 +310,15 @@ def _enforce_forgot_rate_limit(request: Request) -> None:
 
 
 def _public_app_url() -> str:
-    return (os.getenv("PUBLIC_APP_URL") or "http://127.0.0.1:5173").rstrip("/")
+    explicit = os.getenv("PUBLIC_APP_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if railway_domain:
+        if railway_domain.startswith(("http://", "https://")):
+            return railway_domain.rstrip("/")
+        return f"https://{railway_domain.rstrip('/')}"
+    return "http://127.0.0.1:5173"
 
 
 def _magic_reset_url(username: str, token: str) -> str:
