@@ -1441,6 +1441,9 @@ LEARN_META_BEGIN = "[[META]]"
 LEARN_META_END = "[[/META]]"
 SECTION_QUIZ_MASTERY_THRESHOLD = 0.72
 SECTION_FORCE_QUIZ_TURNS = 6
+SMALL_QUIZ_QUESTION_COUNT = 15
+SMALL_QUIZ_JSON_MAX_CHARS = 80000
+QUIZ_PASSING_SCORE = 60.0
 
 
 def _strip_learn_meta_trailer(text: str) -> str:
@@ -1491,8 +1494,8 @@ def _learn_extract_meta_json(
         '"mastery_total":0到1的小数,'
         '"section_complete":true或false,'
         '"section_summary":"本节300字内总结，section_complete为true时必填",'
-        '"small_quiz":[{"question":"题干","options":["A","B","C","D"],"correct_index":0},...]}\n'
-        "规则：small_quiz 要么为 null，要么长度**恰好为3**；correct_index 为0-3；\n"
+        '"small_quiz":[{"question":"题干","options":["A","B","C","D"],"correct_index":0,"explanation":"解析"},...]}\n'
+        f"规则：small_quiz 要么为 null，要么长度**恰好为{SMALL_QUIZ_QUESTION_COUNT}**；correct_index 为0-3；每题必须给出 explanation；\n"
         f"若本轮讲解已覆盖本节核心且互动充分、或 mastery_total>={SECTION_QUIZ_MASTERY_THRESHOLD:.2f}、或 learn_turns_after>={SECTION_FORCE_QUIZ_TURNS}，"
         "则 section_complete=true 且必须给出 small_quiz；否则 section_complete=false 且 small_quiz 为 null。\n"
         f"当前已累计带学轮次（含本轮）为：{learn_turns_after}。"
@@ -1554,12 +1557,13 @@ def _normalize_small_quiz_questions(raw_questions: list[Any]) -> list[Dict[str, 
                 "question": question[:800],
                 "options": [str(x).strip()[:300] for x in options[:4]],
                 "correct_index": correct_index,
+                "explanation": str(item.get("explanation") or item.get("analysis") or "此题用于检验本小节核心概念，正确答案见上方选项。").strip()[:1000],
             }
         )
-        if len(normalized) >= 3:
+        if len(normalized) >= SMALL_QUIZ_QUESTION_COUNT:
             break
-    if len(normalized) < 3:
-        raise ValueError("small quiz must contain 3 valid questions")
+    if len(normalized) < SMALL_QUIZ_QUESTION_COUNT:
+        raise ValueError(f"small quiz must contain {SMALL_QUIZ_QUESTION_COUNT} valid questions")
     return normalized
 
 
@@ -1571,8 +1575,8 @@ def _generate_small_quiz_for_section(
 ) -> list[Dict[str, Any]]:
     sys_q = (
         f"你是「{subject}」课程测验设计教师。请根据当前小节资料生成小节测验。\n"
-        "输出**仅一个 JSON 数组**（不要 markdown 围栏），长度恰好为 3。\n"
-        "每项字段：question、options（4 个选项）、correct_index（0-3）。\n"
+        f"输出**仅一个 JSON 数组**（不要 markdown 围栏），长度恰好为 {SMALL_QUIZ_QUESTION_COUNT}。\n"
+        "每项字段：question、options（4 个选项）、correct_index（0-3）、explanation（中文解析，解释为什么正确）。\n"
         "题目必须覆盖本小节核心概念，难度适合作为跳过带学后的准入测验；"
         "不得考资料中没有出现的事实。"
     )
@@ -1809,6 +1813,8 @@ class LearningStartBody(BaseModel):
     subject: str = Field(..., min_length=1, max_length=64)
     chapter_id: str = Field(..., min_length=1, max_length=64)
     section_id: str = Field(..., min_length=1, max_length=64)
+    reset_progress: bool = True
+    opening_note: str = Field(default="", max_length=4000)
 
 
 class AskImagePart(BaseModel):
@@ -1866,7 +1872,7 @@ class SmallQuizSubmitBody(BaseModel):
     subject: str = Field(..., min_length=1, max_length=64)
     chapter_id: str = Field(..., min_length=1, max_length=64)
     section_id: str = Field(..., min_length=1, max_length=64)
-    answers: List[int] = Field(..., min_length=1, max_length=12)
+    answers: List[int] = Field(..., min_length=1, max_length=30)
 
 
 class SmallQuizPrepareBody(BaseModel):
@@ -2548,21 +2554,23 @@ def learning_start_section(body: LearningStartBody, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail="小节不存在")
     scope_label, ref = _build_learning_reference(ch_row, body.section_id)
     prog = _get_or_create_section_progress(db, u.id, body.subject, body.chapter_id, body.section_id)
-    prog.mastery = 0.0
-    prog.learn_turns = 0
+    if body.reset_progress:
+        prog.mastery = 0.0
+        prog.learn_turns = 0
+        prog.pending_quiz_json = None
+        prog.section_summary = None
+        prog.small_quiz_score = None
+        prog.small_quiz_passed = False
     prog.phase = "questioning"
-    prog.pending_quiz_json = None
-    prog.section_summary = None
-    prog.small_quiz_score = None
-    prog.small_quiz_passed = False
     prog.updated_at = datetime.utcnow()
 
     sk = f"{body.chapter_id}|{body.section_id}"
+    session_title_prefix = "[带学]" if body.reset_progress else "[巩固]"
     sess = ChatSessionDB(
         user_id=u.id,
         subject=body.subject,
         chapter=sk[:512],
-        title=f"[带学]{(sec.get('title') or '小节')[:100]}",
+        title=f"{session_title_prefix}{(sec.get('title') or '小节')[:100]}",
         session_kind="learn",
     )
     db.add(sess)
@@ -2571,9 +2579,17 @@ def learning_start_section(body: LearningStartBody, db: Session = Depends(get_db
     session_id = sess.id
 
     sys_prompt = _learn_opening_system(body.subject, scope_label, ref)
+    opening_note = body.opening_note.strip()
+    opening_user_content = (
+        "学员刚完成本小节测验但未达标。请根据下面的错题摘要继续进行针对性补救讲解，"
+        "先指出薄弱点，再用本小节资料重讲关键概念，最后给 1-2 个巩固练习。\n\n"
+        f"{opening_note}"
+        if not body.reset_progress and opening_note
+        else "请开始本小节的带学讲解（Markdown）。"
+    )
     messages: List[dict[str, str]] = [
         {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": "请开始本小节的带学讲解（Markdown）。"},
+        {"role": "user", "content": opening_user_content},
     ]
 
     def generate_chunks():
@@ -2754,10 +2770,27 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
 
                 assistant_msg = teaching_md
 
-                if want_complete and isinstance(small_quiz, list) and len(small_quiz) >= 3:
+                quiz_questions: list[Dict[str, Any]] | None = None
+                if want_complete and isinstance(small_quiz, list):
+                    try:
+                        quiz_questions = _normalize_small_quiz_questions(small_quiz)
+                    except Exception:
+                        quiz_questions = None
+                if want_complete and quiz_questions is None:
+                    try:
+                        quiz_questions = _generate_small_quiz_for_section(
+                            subject,
+                            scope_label,
+                            ref,
+                            summary,
+                        )
+                    except Exception:
+                        quiz_questions = None
+
+                if want_complete and quiz_questions:
                     prog.phase = "quiz_pending"
                     prog.section_summary = summary[:8000] if summary else None
-                    prog.pending_quiz_json = json.dumps(small_quiz[:5], ensure_ascii=False)[:20000]
+                    prog.pending_quiz_json = json.dumps(quiz_questions, ensure_ascii=False)[:SMALL_QUIZ_JSON_MAX_CHARS]
                     quiz_ready = True
                     if prog.section_summary:
                         assistant_msg += f"\n\n**学习小结**\n{prog.section_summary}"
@@ -2939,7 +2972,7 @@ def learning_small_quiz_prepare(body: SmallQuizPrepareBody, db: Session = Depend
         raise HTTPException(status_code=502, detail=f"小节测验生成失败: {exc}") from exc
 
     prog.phase = "quiz_pending"
-    prog.pending_quiz_json = json.dumps(questions, ensure_ascii=False)[:20000]
+    prog.pending_quiz_json = json.dumps(questions, ensure_ascii=False)[:SMALL_QUIZ_JSON_MAX_CHARS]
     if not prog.section_summary:
         prog.section_summary = f"直接进入小节测验：{scope_label}"
     prog.updated_at = datetime.utcnow()
@@ -2959,28 +2992,60 @@ def learning_small_quiz_submit(body: SmallQuizSubmitBody, db: Session = Depends(
         qs = json.loads(prog.pending_quiz_json)
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="测验数据损坏")
-    if not isinstance(qs, list) or len(qs) < 3:
+    if not isinstance(qs, list) or len(qs) < SMALL_QUIZ_QUESTION_COUNT:
         raise HTTPException(status_code=500, detail="测验题目不完整")
     correct = 0
-    for i in range(3):
-        qi = qs[i]
-        if not isinstance(qi, dict):
-            continue
+    results: list[Dict[str, Any]] = []
+    quiz_questions = _normalize_small_quiz_questions(qs)
+    for i, qi in enumerate(quiz_questions):
         ci = int(qi.get("correct_index", -1))
         ai = body.answers[i] if i < len(body.answers) else -1
-        if 0 <= ai < 4 and 0 <= ci < 4 and ai == ci:
+        ok = 0 <= ai < 4 and 0 <= ci < 4 and ai == ci
+        if ok:
             correct += 1
-    score = (correct / 3.0) * 100.0
-    passed = score >= 60.0
+        results.append(
+            {
+                "index": i,
+                "question": str(qi.get("question") or ""),
+                "options": [str(x) for x in (qi.get("options") or [])[:4]],
+                "selected_index": ai,
+                "correct_index": ci,
+                "is_correct": ok,
+                "explanation": str(qi.get("explanation") or "请回到本小节资料，重新核对该知识点。"),
+            }
+        )
+    total = len(quiz_questions)
+    score = (correct / max(total, 1)) * 100.0
+    passed = score >= QUIZ_PASSING_SCORE
     prog.small_quiz_score = score
     prog.small_quiz_passed = passed
     prog.mastery = max(float(prog.mastery or 0), score / 100.0)
     if passed:
         prog.pending_quiz_json = None
         prog.phase = "done"
+    else:
+        prog.pending_quiz_json = None
+        prog.phase = "questioning"
     prog.updated_at = datetime.utcnow()
     db.commit()
-    return {"score": score, "passed": passed, "correct": correct, "total": 3}
+    weak_items = [x for x in results if not x.get("is_correct")][:5]
+    remedial_prompt = (
+        f"我刚完成「{body.chapter_id} / {body.section_id}」小节测验，得分 {round(score)} 分，未达标。"
+        "请根据这些错题继续带我学习，先补核心概念，再给我练习：\n"
+        + "\n".join(
+            f"{x['index'] + 1}. {x['question']}；正确答案：{chr(65 + int(x['correct_index']))}；解析：{x['explanation']}"
+            for x in weak_items
+        )
+    )
+    return {
+        "score": score,
+        "passed": passed,
+        "correct": correct,
+        "total": total,
+        "passing_score": QUIZ_PASSING_SCORE,
+        "items": results,
+        "remedial_prompt": "" if passed else remedial_prompt[:4000],
+    }
 
 
 @app.post("/learning/chapter-quiz/prepare")

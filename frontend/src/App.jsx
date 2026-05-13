@@ -94,6 +94,7 @@ const normalizeMathText = (text) => {
 
 const ASK_USER_JSON_PREFIX = '__PA_USER_JSON__\n';
 const MAX_CHAT_IMAGES = 5;
+const SMALL_QUIZ_QUESTION_COUNT = 15;
 
 const parseAskUserContent = (content) => {
   if (!content || typeof content !== 'string') return { text: '', images: [] };
@@ -1576,6 +1577,62 @@ const ChatView = ({ subject, username, onBack }) => {
     }
   };
 
+  const startRemedialLearn = async (quizResult) => {
+    if (!selectedChapterId || !selectedSectionId) return;
+    const note = quizResult?.remedial_prompt || '小节测验未达标，请继续针对薄弱点带学。';
+    setIsLoading(true);
+    setLearnMode(true);
+    setMessages([{ role: 'assistant', content: '' }]);
+    bufferRef.current = '';
+    displayRef.current = '';
+    rawRef.current = '';
+    try {
+      const r = await fetch(`${API_BASE}/learning/start-section`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          subject,
+          chapter_id: selectedChapterId,
+          section_id: selectedSectionId,
+          reset_progress: false,
+          opening_note: note,
+        }),
+      });
+      if (!r.ok) {
+        const errText = await r.text().catch(() => '');
+        let detail = errText;
+        try {
+          const j = JSON.parse(errText);
+          detail = formatApiDetail(j) || errText;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail || `HTTP ${r.status}`);
+      }
+      const returnedSessionId = r.headers.get('X-Session-Id');
+      startRenderLoop();
+      await pumpStream(r);
+      await finalizeAssistantStream({ stripLearnMeta: false });
+      const rs = returnedSessionId ? Number(returnedSessionId) : NaN;
+      preferUiOverHistoryUntilRef.current = Number.isNaN(rs) ? null : rs;
+      await loadSessions();
+      if (returnedSessionId) {
+        const numericId = Number(returnedSessionId);
+        if (!Number.isNaN(numericId)) setCurrentSessionId(numericId);
+      }
+      await loadLearningProgress();
+    } catch (e) {
+      console.error(e);
+      setMessages((prev) => [
+        ...prev.filter((m) => m.content),
+        { role: 'assistant', content: `未达标补救带学启动失败：${e?.message || '未知错误'}` },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleLearnAnswer = async (text, imageSnapshot = []) => {
     setIsLoading(true);
     setInputText('');
@@ -1623,7 +1680,7 @@ const ChatView = ({ subject, username, onBack }) => {
       const meta = await finalizeAssistantStream({ stripLearnMeta: true });
       const sid = Number(currentSessionId);
       preferUiOverHistoryUntilRef.current = Number.isNaN(sid) ? null : sid;
-      if (meta?.small_quiz && Array.isArray(meta.small_quiz) && meta.small_quiz.length >= 3) {
+      if (meta?.small_quiz && Array.isArray(meta.small_quiz) && meta.small_quiz.length >= SMALL_QUIZ_QUESTION_COUNT) {
         setQuizModal({ type: 'small', questions: meta.small_quiz });
       }
       await loadLearningProgress();
@@ -1704,15 +1761,11 @@ const ChatView = ({ subject, username, onBack }) => {
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(formatApiDetail(j) || '提交失败');
-      setQuizModal(null);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `小节测验得分：**${Math.round(j.score)}** 分（${j.correct}/${j.total} 题正确）${j.passed ? '，已通过。' : '，未达 60 分，可重新作答带学问题后再测。'}`,
-        },
-      ]);
+      setQuizModal((prev) => (prev ? { ...prev, result: j } : prev));
       await loadLearningProgress();
+      if (!j.passed) {
+        await startRemedialLearn(j);
+      }
     } catch (e) {
       console.error(e);
       setMessages((prev) => [...prev, { role: 'assistant', content: `测验提交失败：${e?.message || ''}` }]);
@@ -2063,6 +2116,8 @@ const ChatView = ({ subject, username, onBack }) => {
       return '';
     }
   };
+
+  const quizResult = quizModal?.result || null;
 
   return (
     <div className="pa-page flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
@@ -2599,67 +2654,112 @@ const ChatView = ({ subject, username, onBack }) => {
 
       {quizModal && quizModal.questions?.length > 0 && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4" role="dialog" aria-modal="true">
-          <div className="max-h-[min(90vh,640px)] w-full max-w-lg overflow-y-auto rounded-xl border border-[#1a1f24]/10 bg-[#faf9f7] p-6 shadow-2xl">
+          <div className="max-h-[min(90vh,720px)] w-full max-w-2xl overflow-y-auto rounded-xl border border-[#1a1f24]/10 bg-[#faf9f7] p-6 shadow-2xl">
             <h3 className="font-display text-lg text-[#1a1f24]">
-              {quizModal.type === 'small' ? '小节学习总结测验' : '大章学习总结测验'}
+              {quizResult ? '测验结果与解析' : quizModal.type === 'small' ? '小节学习总结测验' : '大章学习总结测验'}
             </h3>
             <p className="mt-2 text-[12px] text-[#1a1f24]/50">
-              {quizModal.type === 'small' ? '共 3 题，答对 60% 及以上为通过。' : '共 5 题，答对 60% 及以上为通过。'}
+              {quizResult
+                ? `得分 ${Math.round(quizResult.score)} 分，${quizResult.correct}/${quizResult.total} 题正确。${quizResult.passed ? '已通过。' : '未达标，已自动接入 AI 继续学习。'}`
+                : quizModal.type === 'small'
+                  ? `共 ${SMALL_QUIZ_QUESTION_COUNT} 题，答对 60% 及以上为通过。`
+                  : '共 5 题，答对 60% 及以上为通过。'}
             </p>
-            <div className="mt-5 space-y-5">
-              {quizModal.questions.map((q, qi) => (
-                <div key={qi} className="border-b border-[#1a1f24]/[0.06] pb-4 last:border-0">
-                  <div className="text-[13px] font-medium leading-relaxed text-[#1a1f24]">
-                    {qi + 1}. {q.question}
+            {quizResult ? (
+              <div className="mt-5 space-y-4">
+                {!quizResult.passed && (
+                  <div className="rounded-md border border-amber-200 bg-amber-50/90 p-3 text-[12px] leading-relaxed text-amber-900">
+                    未达标后已自动创建补救带学会话。关闭此窗口后，继续跟随 AI 补薄弱点。
                   </div>
-                  <div className="mt-2 space-y-1.5">
-                    {(q.options || []).map((opt, oi) => (
-                      <label
-                        key={oi}
-                        className="flex cursor-pointer items-start gap-2 rounded-sm border border-transparent px-2 py-1.5 text-[12px] hover:bg-white"
-                      >
-                        <input
-                          type="radio"
-                          className="mt-0.5"
-                          name={`quiz-q-${qi}`}
-                          checked={quizPicks[qi] === oi}
-                          onChange={() =>
-                            setQuizPicks((prev) => {
-                              const next = [...prev];
-                              next[qi] = oi;
-                              return next;
-                            })
-                          }
-                        />
-                        <span>{opt}</span>
-                      </label>
-                    ))}
+                )}
+                {(quizResult.items || []).map((item, qi) => {
+                  const selected = Number(item.selected_index);
+                  const correct = Number(item.correct_index);
+                  const selectedText = selected >= 0 ? `${String.fromCharCode(65 + selected)}. ${item.options?.[selected] || ''}` : '未作答';
+                  const correctText = correct >= 0 ? `${String.fromCharCode(65 + correct)}. ${item.options?.[correct] || ''}` : '—';
+                  return (
+                    <div key={item.index ?? qi} className="rounded-md border border-[#1a1f24]/[0.08] bg-white/75 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="text-[13px] font-medium leading-relaxed text-[#1a1f24]">
+                          {qi + 1}. {item.question}
+                        </div>
+                        <span
+                          className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold ${
+                            item.is_correct ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-700'
+                          }`}
+                        >
+                          {item.is_correct ? '正确' : '需复习'}
+                        </span>
+                      </div>
+                      <div className="mt-2 grid gap-2 text-[12px] text-[#1a1f24]/60 sm:grid-cols-2">
+                        <div>你的答案：<span className="text-[#1a1f24]">{selectedText}</span></div>
+                        <div>正确答案：<span className="text-[#1a1f24]">{correctText}</span></div>
+                      </div>
+                      <p className="mt-2 text-[12px] leading-relaxed text-[#1a1f24]/58">
+                        解析：{item.explanation || '请回到本小节资料，重新核对该知识点。'}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="mt-5 space-y-5">
+                {quizModal.questions.map((q, qi) => (
+                  <div key={qi} className="border-b border-[#1a1f24]/[0.06] pb-4 last:border-0">
+                    <div className="text-[13px] font-medium leading-relaxed text-[#1a1f24]">
+                      {qi + 1}. {q.question}
+                    </div>
+                    <div className="mt-2 space-y-1.5">
+                      {(q.options || []).map((opt, oi) => (
+                        <label
+                          key={oi}
+                          className="flex cursor-pointer items-start gap-2 rounded-sm border border-transparent px-2 py-1.5 text-[12px] hover:bg-white"
+                        >
+                          <input
+                            type="radio"
+                            className="mt-0.5"
+                            name={`quiz-q-${qi}`}
+                            checked={quizPicks[qi] === oi}
+                            onChange={() =>
+                              setQuizPicks((prev) => {
+                                const next = [...prev];
+                                next[qi] = oi;
+                                return next;
+                              })
+                            }
+                          />
+                          <span>{opt}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
             <div className="mt-6 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setQuizModal(null)}
                 className="rounded-sm border border-[#1a1f24]/12 px-4 py-2 text-[12px] text-[#1a1f24]/70 hover:bg-white"
               >
-                稍后
+                {quizResult ? '关闭' : '稍后'}
               </button>
-              <button
-                type="button"
-                disabled={isLoading || quizPicks.some((p) => p < 0)}
-                onClick={() => {
-                  if (quizModal.type === 'small') {
-                    submitSmallQuiz(quizPicks);
-                  } else {
-                    submitChapterQuiz(quizModal.chapterId, quizPicks);
-                  }
-                }}
-                className="rounded-sm bg-[#1a1f24] px-4 py-2 text-[12px] font-semibold text-[#faf9f7] disabled:opacity-40"
-              >
-                提交答案
-              </button>
+              {!quizResult && (
+                <button
+                  type="button"
+                  disabled={isLoading || quizPicks.some((p) => p < 0)}
+                  onClick={() => {
+                    if (quizModal.type === 'small') {
+                      submitSmallQuiz(quizPicks);
+                    } else {
+                      submitChapterQuiz(quizModal.chapterId, quizPicks);
+                    }
+                  }}
+                  className="rounded-sm bg-[#1a1f24] px-4 py-2 text-[12px] font-semibold text-[#faf9f7] disabled:opacity-40"
+                >
+                  提交答案
+                </button>
+              )}
             </div>
           </div>
         </div>
