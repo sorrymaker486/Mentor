@@ -1439,6 +1439,8 @@ def _learn_chat_complete(messages: List[dict[str, str]], temperature: float = 0.
 
 LEARN_META_BEGIN = "[[META]]"
 LEARN_META_END = "[[/META]]"
+SECTION_QUIZ_MASTERY_THRESHOLD = 0.72
+SECTION_FORCE_QUIZ_TURNS = 6
 
 
 def _strip_learn_meta_trailer(text: str) -> str:
@@ -1491,7 +1493,7 @@ def _learn_extract_meta_json(
         '"section_summary":"本节300字内总结，section_complete为true时必填",'
         '"small_quiz":[{"question":"题干","options":["A","B","C","D"],"correct_index":0},...]}\n'
         "规则：small_quiz 要么为 null，要么长度**恰好为3**；correct_index 为0-3；\n"
-        "若本轮讲解已覆盖本节核心且互动充分、或 mastery_total>=0.72、或 learn_turns_after>=6，"
+        f"若本轮讲解已覆盖本节核心且互动充分、或 mastery_total>={SECTION_QUIZ_MASTERY_THRESHOLD:.2f}、或 learn_turns_after>={SECTION_FORCE_QUIZ_TURNS}，"
         "则 section_complete=true 且必须给出 small_quiz；否则 section_complete=false 且 small_quiz 为 null。\n"
         f"当前已累计带学轮次（含本轮）为：{learn_turns_after}。"
     )
@@ -1530,6 +1532,68 @@ def _parse_json_array_from_llm(raw: str) -> list[Any]:
     if not isinstance(val, list):
         raise ValueError("top-level json is not array")
     return val
+
+
+def _normalize_small_quiz_questions(raw_questions: list[Any]) -> list[Dict[str, Any]]:
+    normalized: list[Dict[str, Any]] = []
+    for item in raw_questions:
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get("question") or "").strip()
+        options = item.get("options")
+        if not question or not isinstance(options, list) or len(options) < 4:
+            continue
+        try:
+            correct_index = int(item.get("correct_index", -1))
+        except Exception:
+            correct_index = -1
+        if correct_index < 0 or correct_index > 3:
+            continue
+        normalized.append(
+            {
+                "question": question[:800],
+                "options": [str(x).strip()[:300] for x in options[:4]],
+                "correct_index": correct_index,
+            }
+        )
+        if len(normalized) >= 3:
+            break
+    if len(normalized) < 3:
+        raise ValueError("small quiz must contain 3 valid questions")
+    return normalized
+
+
+def _generate_small_quiz_for_section(
+    subject: str,
+    scope_label: str,
+    ref_excerpt: str,
+    section_summary: str = "",
+) -> list[Dict[str, Any]]:
+    sys_q = (
+        f"你是「{subject}」课程测验设计教师。请根据当前小节资料生成小节测验。\n"
+        "输出**仅一个 JSON 数组**（不要 markdown 围栏），长度恰好为 3。\n"
+        "每项字段：question、options（4 个选项）、correct_index（0-3）。\n"
+        "题目必须覆盖本小节核心概念，难度适合作为跳过带学后的准入测验；"
+        "不得考资料中没有出现的事实。"
+    )
+    user_q = (
+        f"【小节】{scope_label}\n"
+        f"【已有小结】\n{section_summary[:2500] or '暂无，按资料命题。'}\n\n"
+        f"【资料】\n{(ref_excerpt or '')[:12000]}"
+    )
+    raw = _learn_chat_complete(
+        [{"role": "system", "content": sys_q}, {"role": "user", "content": user_q}],
+        temperature=0.25,
+    )
+    try:
+        arr = _parse_json_array_from_llm(raw)
+    except Exception:
+        obj = _parse_json_object_from_llm(raw)
+        if isinstance(obj, dict) and isinstance(obj.get("questions"), list):
+            arr = obj["questions"]
+        else:
+            raise
+    return _normalize_small_quiz_questions(arr)
 
 
 def _get_or_create_section_progress(
@@ -1803,6 +1867,14 @@ class SmallQuizSubmitBody(BaseModel):
     chapter_id: str = Field(..., min_length=1, max_length=64)
     section_id: str = Field(..., min_length=1, max_length=64)
     answers: List[int] = Field(..., min_length=1, max_length=12)
+
+
+class SmallQuizPrepareBody(BaseModel):
+    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    subject: str = Field(..., min_length=1, max_length=64)
+    chapter_id: str = Field(..., min_length=1, max_length=64)
+    section_id: str = Field(..., min_length=1, max_length=64)
+    mode: str = Field(default="direct", max_length=24)
 
 
 class ChapterQuizPrepareBody(BaseModel):
@@ -2115,6 +2187,11 @@ def _studio_collect_recent_messages(
 def _heuristic_merge_mastery_into_portrait(
     db: Session, user_id: int, subject: str, portrait: Dict[str, Any]
 ) -> None:
+    if not isinstance(portrait.get("dimensions"), dict):
+        portrait["dimensions"] = {}
+    for key in PORTRAIT_DIMENSION_KEYS:
+        portrait["dimensions"].setdefault(key, {"score": 0.5, "note": "证据仍在积累"})
+
     rows = (
         db.query(SectionLearningProgressDB)
         .filter(
@@ -2125,12 +2202,31 @@ def _heuristic_merge_mastery_into_portrait(
     )
     if not rows:
         return
-    avg = sum(float(r.mastery or 0) for r in rows) / max(len(rows), 1)
-    kb = portrait["dimensions"].get("知识基础") or {"score": 0.5, "note": ""}
-    kb["score"] = max(0.0, min(1.0, (float(kb.get("score") or 0.5) + avg) / 2.0))
-    note = str(kb.get("note") or "")[:100]
-    kb["note"] = (note + "（融合小节掌握度均值）").strip()[:120]
-    portrait["dimensions"]["知识基础"] = kb
+    avg_mastery = sum(float(r.mastery or 0) for r in rows) / max(len(rows), 1)
+    passed = sum(1 for r in rows if r.small_quiz_passed)
+    quiz_pending = sum(1 for r in rows if r.phase == "quiz_pending")
+    active = sum(1 for r in rows if int(r.learn_turns or 0) > 0 or float(r.mastery or 0) > 0)
+    passed_ratio = passed / max(len(rows), 1)
+    turn_avg = sum(int(r.learn_turns or 0) for r in rows) / max(active, 1)
+
+    def blend_dimension(key: str, score: float, note: str, weight: float = 0.68) -> None:
+        current = portrait["dimensions"].get(key) or {"score": 0.5, "note": ""}
+        base = max(0.0, min(1.0, float(current.get("score") or 0.5)))
+        merged_score = (base * (1.0 - weight)) + (max(0.0, min(1.0, score)) * weight)
+        portrait["dimensions"][key] = {
+            "score": max(0.0, min(1.0, merged_score)),
+            "note": note[:120],
+        }
+
+    blend_dimension("知识基础", avg_mastery, f"随小节掌握度同步，当前均值约 {round(avg_mastery * 100)}%。")
+    blend_dimension(
+        "学习目标对齐度",
+        max(avg_mastery, passed_ratio),
+        f"已通过 {passed} 个小节测验，{quiz_pending} 个小节待测。",
+        weight=0.58,
+    )
+    pace_score = min(1.0, 0.42 + passed_ratio * 0.45 + min(turn_avg, SECTION_FORCE_QUIZ_TURNS) / SECTION_FORCE_QUIZ_TURNS * 0.13)
+    blend_dimension("学习节奏", pace_score, f"平均带学 {turn_avg:.1f} 轮；通过测验后节奏评分会继续上升。", weight=0.52)
 
 
 def _studio_llm_portrait(
@@ -2243,7 +2339,15 @@ def learning_studio_portrait_get(
         data = json.loads(row.portrait_json or "{}")
     except json.JSONDecodeError:
         data = default_portrait()
-    return {"portrait": data, "updated_at": row.updated_at.isoformat() if row.updated_at else None}
+    if not isinstance(data, dict):
+        data = default_portrait()
+    _heuristic_merge_mastery_into_portrait(db, u.id, subject, data)
+    return {
+        "portrait": data,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "synced_at": datetime.utcnow().isoformat(),
+        "progress_synced": True,
+    }
 
 
 @app.post("/learning/studio/portrait/refresh")
@@ -2645,7 +2749,7 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
                 prog.mastery = max(float(prog.mastery or 0), mastery_new)
                 prog.updated_at = datetime.utcnow()
 
-                if learn_turns_after >= 6:
+                if mastery_new >= SECTION_QUIZ_MASTERY_THRESHOLD or learn_turns_after >= SECTION_FORCE_QUIZ_TURNS:
                     want_complete = True
 
                 assistant_msg = teaching_md
@@ -2750,8 +2854,13 @@ def learning_progress(
             "mastery": r.mastery,
             "learn_turns": r.learn_turns,
             "phase": r.phase,
+            "quiz_pending": r.phase == "quiz_pending" and bool(r.pending_quiz_json),
+            "ready_for_quiz": bool(r.pending_quiz_json)
+            or float(r.mastery or 0) >= SECTION_QUIZ_MASTERY_THRESHOLD
+            or int(r.learn_turns or 0) >= SECTION_FORCE_QUIZ_TURNS,
             "small_quiz_passed": r.small_quiz_passed,
             "small_quiz_score": r.small_quiz_score,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         }
 
     chapters_out: Dict[str, Any] = {}
@@ -2781,8 +2890,61 @@ def learning_progress(
             "chapter_quiz_ready": total > 0 and passed >= total,
             "chapter_quiz_passed": bool(cq.chapter_quiz_passed) if cq else False,
             "chapter_quiz_score": cq.chapter_quiz_score if cq else None,
+            "updated_at": cq.updated_at.isoformat() if cq and cq.updated_at else None,
         }
-    return {"subject": subject, "sections": section_map, "chapters": chapters_out}
+    return {
+        "subject": subject,
+        "sections": section_map,
+        "chapters": chapters_out,
+        "section_completion_rule": {
+            "mastery_threshold": SECTION_QUIZ_MASTERY_THRESHOLD,
+            "force_quiz_turns": SECTION_FORCE_QUIZ_TURNS,
+        },
+    }
+
+
+@app.post("/learning/quiz/small/prepare")
+def learning_small_quiz_prepare(body: SmallQuizPrepareBody, db: Session = Depends(get_db)):
+    u = db.query(UserDB).filter(UserDB.username == body.username).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    course = db.query(CourseDB).filter(CourseDB.name == body.subject).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    ch_row = _chapter_row(db, course.id, body.chapter_id)
+    if not ch_row:
+        raise HTTPException(status_code=404, detail="大章不存在")
+    sec = find_section(ch_row.subsections, body.section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="小节不存在")
+
+    prog = _get_or_create_section_progress(db, u.id, body.subject, body.chapter_id, body.section_id)
+    if prog.small_quiz_passed:
+        return {"questions": [], "already_passed": True}
+    if prog.pending_quiz_json and prog.phase == "quiz_pending":
+        try:
+            return {"questions": _normalize_small_quiz_questions(json.loads(prog.pending_quiz_json))}
+        except Exception:
+            prog.pending_quiz_json = None
+
+    scope_label, ref = _build_learning_reference(ch_row, body.section_id)
+    try:
+        questions = _generate_small_quiz_for_section(
+            body.subject,
+            scope_label,
+            ref,
+            prog.section_summary or "",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"小节测验生成失败: {exc}") from exc
+
+    prog.phase = "quiz_pending"
+    prog.pending_quiz_json = json.dumps(questions, ensure_ascii=False)[:20000]
+    if not prog.section_summary:
+        prog.section_summary = f"直接进入小节测验：{scope_label}"
+    prog.updated_at = datetime.utcnow()
+    db.commit()
+    return {"questions": questions, "already_passed": False}
 
 
 @app.post("/learning/quiz/small/submit")
@@ -2812,6 +2974,7 @@ def learning_small_quiz_submit(body: SmallQuizSubmitBody, db: Session = Depends(
     passed = score >= 60.0
     prog.small_quiz_score = score
     prog.small_quiz_passed = passed
+    prog.mastery = max(float(prog.mastery or 0), score / 100.0)
     if passed:
         prog.pending_quiz_json = None
         prog.phase = "done"

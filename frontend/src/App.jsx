@@ -1150,7 +1150,7 @@ const ChatView = ({ subject, username, onBack }) => {
 
   const [chapterRightTab, setChapterRightTab] = useState('catalog');
   const [visitedSections, setVisitedSections] = useState([]);
-  const [progress, setProgress] = useState({ sections: {}, chapters: {} });
+  const [progress, setProgress] = useState({ sections: {}, chapters: {}, sectionRule: null });
   const [learnMode, setLearnMode] = useState(false);
   const [quizModal, setQuizModal] = useState(null);
   const [chapterPanelWidth] = useState(380);
@@ -1266,6 +1266,7 @@ const ChatView = ({ subject, username, onBack }) => {
       setProgress({
         sections: d.sections || {},
         chapters: d.chapters || {},
+        sectionRule: d.section_completion_rule || null,
       });
     } catch {
       /* ignore */
@@ -1332,7 +1333,7 @@ const ChatView = ({ subject, username, onBack }) => {
     setExpandedChapters({});
     setLearnMode(false);
     setQuizModal(null);
-    setProgress({ sections: {}, chapters: {} });
+    setProgress({ sections: {}, chapters: {}, sectionRule: null });
     setChapterRightTab('catalog');
     preferUiOverHistoryUntilRef.current = null;
 
@@ -1393,6 +1394,37 @@ const ChatView = ({ subject, username, onBack }) => {
   const progressPercent = totalSectionCount
     ? Math.round((passedSectionCount / totalSectionCount) * 100)
     : 0;
+
+  const progressSignal = useMemo(() => {
+    const sections = Object.entries(progress.sections || {})
+      .map(([key, value]) => [
+        key,
+        value?.mastery,
+        value?.learn_turns,
+        value?.phase,
+        value?.small_quiz_score,
+        value?.small_quiz_passed,
+        value?.updated_at,
+      ])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    const chapters = Object.entries(progress.chapters || {})
+      .map(([key, value]) => [
+        key,
+        value?.sections_quiz_passed,
+        value?.chapter_quiz_passed,
+        value?.chapter_quiz_score,
+        value?.updated_at,
+      ])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    return JSON.stringify({ sections, chapters });
+  }, [progress.sections, progress.chapters]);
+
+  const currentSectionProgress = sessionScopeKey ? progress.sections?.[sessionScopeKey] : null;
+  const currentMasteryPercent = Math.round(Math.max(0, Math.min(1, Number(currentSectionProgress?.mastery || 0))) * 100);
+  const sectionRule = progress.sectionRule || {};
+  const sectionMasteryTarget = Math.round(Number(sectionRule.mastery_threshold ?? 0.72) * 100);
+  const sectionForceTurns = Number(sectionRule.force_quiz_turns ?? 6);
+  const canPrepareSmallQuiz = !!selectedChapterId && !!selectedSectionId && !currentSectionProgress?.small_quiz_passed;
 
   const applySessionChapter = (raw) => {
     if (!raw || !catalog.length) return;
@@ -1618,6 +1650,38 @@ const ChatView = ({ subject, username, onBack }) => {
         }
         return [...prev, { role: 'assistant', content: `抱歉：${e?.message || '服务不可用'}` }];
       });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const prepareSmallQuiz = async () => {
+    if (!selectedChapterId || !selectedSectionId || isLoading) return;
+    setIsLoading(true);
+    try {
+      const r = await fetch(`${API_BASE}/learning/quiz/small/prepare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          subject,
+          chapter_id: selectedChapterId,
+          section_id: selectedSectionId,
+          mode: currentSectionProgress?.quiz_pending ? 'resume' : 'direct',
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(formatApiDetail(j) || '小节测验生成失败');
+      if (j.already_passed) {
+        setMessages((prev) => [...prev, { role: 'assistant', content: '当前小节测验已经通过，可以继续学习后续小节。' }]);
+        await loadLearningProgress();
+        return;
+      }
+      setQuizModal({ type: 'small', questions: j.questions || [] });
+      await loadLearningProgress();
+    } catch (e) {
+      console.error(e);
+      setMessages((prev) => [...prev, { role: 'assistant', content: `小节测验生成失败：${e?.message || ''}` }]);
     } finally {
       setIsLoading(false);
     }
@@ -2035,6 +2099,7 @@ const ChatView = ({ subject, username, onBack }) => {
                 username={username}
                 subject={subject}
                 sessionId={currentSessionId}
+                progressSignal={progressSignal}
               />
 
               <button
@@ -2220,6 +2285,11 @@ const ChatView = ({ subject, username, onBack }) => {
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="text-[12px] font-medium tracking-wide text-[#1a1f24]/45">
                 当前小节 · <span className="text-[#1a1f24]">{scopeLabel || '未选择'}</span>
+                {selectedSectionId && (
+                  <span className="ml-2 text-[#1a1f24]/35">
+                    掌握 {currentMasteryPercent}% · {currentSectionProgress?.learn_turns || 0}/{sectionForceTurns} 轮
+                  </span>
+                )}
               </div>
               <div className="h-[3px] w-44 overflow-hidden rounded-full bg-[#1a1f24]/[0.08]">
                 <div
@@ -2228,6 +2298,9 @@ const ChatView = ({ subject, username, onBack }) => {
                 />
               </div>
             </div>
+            <p className="text-[10px] leading-relaxed text-[#1a1f24]/38">
+              小节结束规则：掌握度达到 {sectionMasteryTarget}% 或完成 {sectionForceTurns} 轮带学后出现小节测验；也可以直接进入小节测验跳过带学。全章小节测验通过后，章节测试会自动出现。
+            </p>
 
             <div className="flex flex-wrap items-center gap-2">
               <span
@@ -2255,6 +2328,14 @@ const ChatView = ({ subject, username, onBack }) => {
                   结束带学
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => void prepareSmallQuiz()}
+                disabled={isLoading || !canPrepareSmallQuiz}
+                className="rounded-sm border border-[#1a1f24]/15 bg-white px-3 py-1.5 text-[11px] font-semibold text-[#1a1f24]/68 transition-colors hover:border-[#b8955c]/45 hover:bg-[#faf6ef] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {currentSectionProgress?.quiz_pending ? '继续小节测验' : currentSectionProgress?.small_quiz_passed ? '小节已通过' : '直接小节测验'}
+              </button>
             </div>
 
             {pendingImages.length > 0 && (
@@ -2433,6 +2514,19 @@ const ChatView = ({ subject, username, onBack }) => {
                               : (st?.learn_turns || 0) > 0
                                 ? 'bg-amber-500/90'
                                 : 'bg-[#1a1f24]/18';
+                            const masteryPct = Math.round(Math.max(0, Math.min(1, Number(st?.mastery || 0))) * 100);
+                            const sectionStatusLabel = st?.small_quiz_passed
+                              ? '已通过'
+                              : st?.quiz_pending
+                                ? '待测验'
+                                : (st?.learn_turns || 0) > 0
+                                  ? `${masteryPct}%`
+                                  : '未开始';
+                            const sectionStatusClass = st?.small_quiz_passed
+                              ? 'bg-emerald-50 text-emerald-800'
+                              : st?.quiz_pending
+                                ? 'bg-amber-50 text-amber-900'
+                                : 'bg-[#1a1f24]/[0.05] text-[#1a1f24]/45';
                             return (
                               <button
                                 key={sec.id}
@@ -2451,6 +2545,9 @@ const ChatView = ({ subject, username, onBack }) => {
                                 }`}
                               >
                                 <span className="min-w-0 flex-1 leading-snug">{sec.title}</span>
+                                <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold ${sectionStatusClass}`}>
+                                  {sectionStatusLabel}
+                                </span>
                                 <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} title={st?.small_quiz_passed ? '小节测验已通过' : '未完成小节测验'} />
                               </button>
                             );
@@ -2478,7 +2575,7 @@ const ChatView = ({ subject, username, onBack }) => {
             )}
 
             {chapterRightTab === 'path' && (
-              <StudioPathPanel apiBase={API_BASE} username={username} subject={subject} />
+              <StudioPathPanel apiBase={API_BASE} username={username} subject={subject} progressSignal={progressSignal} />
             )}
 
             {chapterRightTab === 'resources' && (
@@ -2494,7 +2591,7 @@ const ChatView = ({ subject, username, onBack }) => {
 
             <div className="shrink-0 border-t border-[#1a1f24]/[0.06] p-2 sm:p-3">
               <div className="border border-[#1a1f24]/[0.08] bg-white/70 p-3 text-[11px] leading-relaxed text-[#1a1f24]/50 sm:text-[12px]">
-                先选小节。自由提问由你发起；「AI 带学」由导师提问、你作答，完成后有小节测验；全小节通过后解锁大章测验。个性化资源在「资源生成」页签。
+                先选小节。达到掌握度目标或完成带学轮次后会出现小节测验；也可直接小节测验跳过带学。全章小节通过后解锁大章测验。个性化资源在「资源生成」页签。
               </div>
             </div>
           </div>

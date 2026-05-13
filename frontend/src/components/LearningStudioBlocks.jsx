@@ -291,7 +291,7 @@ export function StudioMentorOverviewModal({ open, onClose, apiBase }) {
 }
 
 /** 对话页左侧：学习画像（进入课程即加载，可展开六维） */
-export function StudioPortraitCard({ apiBase, username, subject, sessionId }) {
+export function StudioPortraitCard({ apiBase, username, subject, sessionId, progressSignal = '' }) {
   const [portrait, setPortrait] = useState(null);
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -309,7 +309,7 @@ export function StudioPortraitCard({ apiBase, username, subject, sessionId }) {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(formatApiDetail(j) || '加载失败');
       setPortrait(j.portrait || null);
-      setMeta(j.updated_at || null);
+      setMeta(j.synced_at || j.updated_at || null);
     } catch (e) {
       setErr(e?.message || '加载失败');
     } finally {
@@ -319,7 +319,7 @@ export function StudioPortraitCard({ apiBase, username, subject, sessionId }) {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, progressSignal]);
 
   const refresh = async () => {
     if (!username || !subject) return;
@@ -360,7 +360,7 @@ export function StudioPortraitCard({ apiBase, username, subject, sessionId }) {
           {expanded ? '收起说明' : '各维说明'}
         </button>
       </div>
-      {meta && <p className="mt-1 text-[10px] text-[#1a1f24]/38">更新 {meta}</p>}
+      {meta && <p className="mt-1 text-[10px] text-[#1a1f24]/38">更新 {meta} · 随进度同步</p>}
       {err && <p className="mt-2 text-[11px] text-red-700">{err}</p>}
 
       <div className="mt-3 rounded-lg border border-[#1a1f24]/[0.06] bg-white/80 px-2 py-3">
@@ -396,14 +396,14 @@ export function StudioPortraitCard({ apiBase, username, subject, sessionId }) {
         onClick={() => void refresh()}
         className="pa-motion-ui mt-4 w-full border border-[#1a1f24]/[0.1] bg-[#1a1f24] py-2.5 text-[10px] font-semibold tracking-[0.16em] text-[#faf9f7] transition-all hover:bg-[#242b32] disabled:opacity-50"
       >
-        {loading ? '处理中…' : '用 LLM 刷新画像'}
+        {loading ? '处理中…' : '重新分析画像'}
       </button>
     </div>
   );
 }
 
 /** 对话页右侧：学习路径 */
-export function StudioPathPanel({ apiBase, username, subject }) {
+export function StudioPathPanel({ apiBase, username, subject, progressSignal = '' }) {
   const [pathData, setPathData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
@@ -428,7 +428,7 @@ export function StudioPathPanel({ apiBase, username, subject }) {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, progressSignal]);
 
   const rebuild = async () => {
     setLoading(true);

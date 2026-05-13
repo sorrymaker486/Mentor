@@ -1,9 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
-  /* 中文大标题偏企业站衬线；拉丁副标题仍可用 Cormorant */
-  --font-display: "Noto Serif SC", "Cormorant Garamond", ui-serif, Georgia, serif;
+  --font-sans: "Inter", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+  /* 课堂界面改为更稳的专业无衬线；必要时才回落到中文宋体感标题。 */
+  --font-display: "Inter", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Serif SC", ui-sans-serif, system-ui, sans-serif;
 }
 
 /* --- Property Agent 浅色企业站：色彩与动效 --- */
