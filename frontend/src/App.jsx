@@ -257,6 +257,7 @@ const LoginView = ({ onLoginSuccess }) => {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [regEmail, setRegEmail] = useState('');
+  const [forgotEmail, setForgotEmail] = useState('');
   const [resetToken, setResetToken] = useState('');
   const [tokenReady, setTokenReady] = useState(false);
   const [resetHint, setResetHint] = useState('');
@@ -302,6 +303,7 @@ const LoginView = ({ onLoginSuccess }) => {
     const cleanConfirm = confirmPassword.trim();
     const cleanToken = resetToken.trim();
     const cleanRegEmail = regEmail.trim();
+    const cleanForgotEmail = forgotEmail.trim().toLowerCase();
 
     const usernameRegex = /^[a-zA-Z0-9_]{3,16}$/;
     /* 注册 / 重置：仅大小写字母与数字，且须同时含大写、小写、数字；6-20 位 */
@@ -327,24 +329,19 @@ const LoginView = ({ onLoginSuccess }) => {
         setErrorMsg('');
         return;
       }
-      if (!cleanUsername) {
-        setErrorMsg('请输入用户名');
+      if (!cleanForgotEmail) {
+        setErrorMsg('请输入注册邮箱');
         triggerShake();
         return;
       }
-      if (!usernameRegex.test(cleanUsername)) {
-        setErrorMsg('用户名需为 3-16 位字母、数字或下划线');
+      if (!emailRegex.test(cleanForgotEmail)) {
+        setErrorMsg('邮箱格式不正确');
         triggerShake();
         return;
       }
     }
 
     if (authStep === 'forgot-reset') {
-      if (!cleanUsername) {
-        setErrorMsg('请输入用户名');
-        triggerShake();
-        return;
-      }
       if (!cleanToken) {
         setErrorMsg('请输入重置令牌');
         triggerShake();
@@ -424,7 +421,7 @@ const LoginView = ({ onLoginSuccess }) => {
           response = await fetch(`${API_BASE}/forgot-password`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: cleanUsername }),
+            body: JSON.stringify({ email: cleanForgotEmail }),
             signal: ac.signal,
           });
         } finally {
@@ -463,7 +460,6 @@ const LoginView = ({ onLoginSuccess }) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            username: cleanUsername,
             reset_token: cleanToken,
             password: cleanPassword,
           }),
@@ -481,12 +477,16 @@ const LoginView = ({ onLoginSuccess }) => {
           triggerShake();
           return;
         }
+        if (typeof data.username === 'string' && data.username) {
+          setUsername(data.username);
+        }
         setAuthStep('login');
         setPassword('');
         setConfirmPassword('');
         setResetToken('');
         setTokenReady(false);
         setResetHint('');
+        setForgotEmail('');
         setShowPassword(false);
         setShowConfirmPassword(false);
         setSuccessMsg(typeof data.message === 'string' ? data.message : '密码已重置，请使用新密码登录');
@@ -629,22 +629,39 @@ const LoginView = ({ onLoginSuccess }) => {
                       : authStep === 'login'
                         ? '请输入密码继续进入学习空间。'
                         : authStep === 'register'
-                          ? '该用户名可用。新密码须为 6-20 位，仅大小写字母与数字，且同时包含大写、小写与数字。可选填邮箱以便收取重置链接。'
+                          ? '该用户名可用。新密码须为 6-20 位，仅大小写字母与数字，且同时包含大写、小写与数字。邮箱必填，用于接收重置令牌。'
                           : authStep === 'forgot'
                             ? tokenReady
                               ? resetHint ||
-                                '系统不会在网页上显示令牌。请查收注册邮箱（含垃圾箱），点击邮件中的链接完成重置。'
-                              : '提交后，若账号已登记过邮箱，我们会向该邮箱发送一封带重置链接的邮件（链接约 20 分钟内有效）。'
-                            : '粘贴邮件中的重置令牌，或通过邮件内一键链接自动填入，并设置符合规则的新密码。'}
+                                '系统不会在网页上显示令牌。请查收注册邮箱（含垃圾箱），复制邮件中的令牌继续完成重置。'
+                              : '提交注册邮箱后，若该邮箱已绑定账号，我们会发送一枚重置令牌（约 20 分钟内有效）。'
+                            : '粘贴邮件中的重置令牌，并设置符合规则的新密码。'}
                   </p>
                 </div>
 
                 <div className="space-y-4">
+                {authStep === 'forgot' ? (
                   <div>
-                  <label className="mb-2 block text-[10px] pa-label text-[#1a1f24]/35 pa-motion-body">Username</label>
-                  <input
+                    <label className="mb-2 block text-[10px] pa-label text-[#1a1f24]/35 pa-motion-body">Email</label>
+                    <input
+                      type="email"
+                      autoComplete="email"
+                      placeholder="注册时填写的邮箱"
+                      value={forgotEmail}
+                      onChange={(e) => {
+                        setForgotEmail(e.target.value);
+                        if (errorMsg) setErrorMsg('');
+                        if (successMsg) setSuccessMsg('');
+                      }}
+                      onKeyDown={handleKeyDown}
+                      className="pa-motion-ui w-full border border-[#1a1f24]/[0.1] bg-[#faf9f7] px-4 py-4 text-[15px] font-medium outline-none transition-all duration-500 placeholder:text-[#1a1f24]/22 focus:border-[#b8955c]/55 focus:bg-white focus:shadow-[0_0_0_1px_rgba(184,149,92,0.2)]"
+                    />
+                  </div>
+                ) : authStep !== 'forgot-reset' ? (
+                  <div>
+                    <label className="mb-2 block text-[10px] pa-label text-[#1a1f24]/35 pa-motion-body">Username</label>
+                    <input
                       type="text"
-                      readOnly={authStep === 'forgot-reset'}
                       placeholder="用户名 (3-16位字母/数字/下划线)"
                       value={username}
                       onChange={(e) => {
@@ -654,20 +671,21 @@ const LoginView = ({ onLoginSuccess }) => {
                         if (successMsg) setSuccessMsg('');
                       }}
                       onKeyDown={handleKeyDown}
-                    className="pa-motion-ui w-full border border-[#1a1f24]/[0.1] bg-[#faf9f7] px-4 py-4 text-[15px] font-medium outline-none transition-all duration-500 placeholder:text-[#1a1f24]/22 read-only:cursor-default read-only:bg-[#f0ede6]/80 focus:border-[#b8955c]/55 focus:bg-white focus:shadow-[0_0_0_1px_rgba(184,149,92,0.2)]"
-                  />
-                </div>
+                      className="pa-motion-ui w-full border border-[#1a1f24]/[0.1] bg-[#faf9f7] px-4 py-4 text-[15px] font-medium outline-none transition-all duration-500 placeholder:text-[#1a1f24]/22 focus:border-[#b8955c]/55 focus:bg-white focus:shadow-[0_0_0_1px_rgba(184,149,92,0.2)]"
+                    />
+                  </div>
+                ) : null}
 
                 {authStep === 'forgot' && tokenReady && (
                   <div className="space-y-2 border border-amber-200/90 bg-amber-50/90 px-4 py-3 text-sm leading-relaxed text-[#1a1f24]/80">
                     <p className="font-medium text-[#1a1f24]">下一步前请先取得令牌</p>
                     <p>
                       这里<strong>不会显示</strong>安全令牌。请到<strong>注册时填写的邮箱</strong>查收（别忘了看<strong>垃圾箱</strong>
-                      与<strong>订阅邮件</strong>），点击邮件里的链接继续完成重置。
+                      与<strong>订阅邮件</strong>），复制邮件里的令牌继续完成重置。
                     </p>
                     <p className="text-[12px] text-[#1a1f24]/55">
                       若迟迟收不到：确认用的是注册时登记的邮箱；在邮箱里搜索「Mentor」或「重置」；稍等几分钟再刷新。
-                      若邮件里的链接打不开，请用与平时打开本页相同的网址重新进入后再试。
+                      令牌只在短时间内有效，过期后请重新获取。
                     </p>
                   </div>
                 )}
@@ -760,6 +778,7 @@ const LoginView = ({ onLoginSuccess }) => {
                         setResetToken('');
                         setResetHint('');
                         setRegEmail('');
+                        setForgotEmail('');
                       }}
                       className="text-[12px] tracking-[0.12em] text-[#8a6f42] transition-colors hover:text-[#1a1f24]"
                     >
@@ -859,6 +878,7 @@ const LoginView = ({ onLoginSuccess }) => {
                         setAuthStep('check');
                         setPassword('');
                         setRegEmail('');
+                        setForgotEmail('');
                         setErrorMsg('');
                         setSuccessMsg('');
                         setShowPassword(false);
@@ -876,6 +896,7 @@ const LoginView = ({ onLoginSuccess }) => {
                         setAuthStep('check');
                         setPassword('');
                         setRegEmail('');
+                        setForgotEmail('');
                         setErrorMsg('');
                         setSuccessMsg('');
                         setShowPassword(false);
@@ -896,6 +917,7 @@ const LoginView = ({ onLoginSuccess }) => {
                         setTokenReady(false);
                         setResetToken('');
                         setResetHint('');
+                        setForgotEmail('');
                       }}
                       className="w-full py-3 text-[12px] tracking-[0.18em] text-[#1a1f24]/38 transition-colors hover:text-[#1a1f24] uppercase"
                     >
@@ -935,6 +957,7 @@ const LoginView = ({ onLoginSuccess }) => {
                           setTokenReady(false);
                           setResetToken('');
                           setResetHint('');
+                          setForgotEmail('');
                         }}
                         className="w-full py-1 text-[12px] tracking-[0.18em] text-[#1a1f24]/30 transition-colors hover:text-[#1a1f24]/55 uppercase"
                       >

@@ -54,7 +54,7 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import create_engine, ForeignKey, DateTime, String, inspect, text, Text, UniqueConstraint, Float, Integer, Boolean
+from sqlalchemy import create_engine, ForeignKey, DateTime, String, inspect, text, Text, UniqueConstraint, Float, Integer, Boolean, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import (
     sessionmaker,
@@ -327,6 +327,26 @@ def _magic_reset_url(username: str, token: str) -> str:
     return f"{_public_app_url()}/?{q}"
 
 
+def _password_reset_token_content(token: str) -> tuple[str, str]:
+    plain = (
+        "您好，\n\n"
+        "您正在重置 Mentor 账户密码。请在网站的重置密码页面输入下面的令牌"
+        "（20 分钟内有效，仅可使用一次）：\n\n"
+        f"{token}\n\n"
+        "请勿转发本邮件或把令牌提供给他人。\n\n"
+        "若不是你本人操作，请忽略本邮件。\n"
+    )
+    html = (
+        "<p>您好，</p>"
+        "<p>您正在重置 Mentor 账户密码。请在网站的重置密码页面输入下面的令牌"
+        "（20 分钟内有效，仅可使用一次）：</p>"
+        f'<p style="font-family:monospace;font-size:18px;letter-spacing:0.04em;">{token}</p>'
+        "<p>请勿转发本邮件或把令牌提供给他人。</p>"
+        "<p>若不是你本人操作，请忽略本邮件。</p>"
+    )
+    return plain, html
+
+
 def _smtp_configured() -> bool:
     return bool(os.getenv("PASSWORD_RESET_SMTP_HOST", "").strip())
 
@@ -385,24 +405,10 @@ def _send_password_reset_gmail(to_addr: str, username: str, token: str) -> bool:
         print("[PASSWORD_RESET] Gmail API: PASSWORD_RESET_GMAIL_FROM or GMAIL_FROM is missing.")
         return False
 
-    link = _magic_reset_url(username, token)
-    plain = (
-        f"您好，{username}\n\n"
-        f"您正在重置 Mentor 账户密码。请在浏览器中打开以下链接（20 分钟内有效，仅可使用一次）：\n\n"
-        f"{link}\n\n"
-        f"若收件箱没有本邮件，请到垃圾箱查找。\n\n"
-        f"若不是你本人操作，请忽略本邮件。\n"
-    )
-    html = (
-        f"<p>您好，{username}</p>"
-        f"<p>您正在重置 Mentor 账户密码。请点击下方链接（20 分钟内有效，仅可使用一次）：</p>"
-        f'<p><a href="{link}">{link}</a></p>'
-        f"<p>若收件箱没有本邮件，请到垃圾箱查找。</p>"
-        f"<p>若不是你本人操作，请忽略本邮件。</p>"
-    )
+    plain, html = _password_reset_token_content(token)
 
     msg = EmailMessage()
-    msg["Subject"] = "【Mentor】密码重置验证"
+    msg["Subject"] = "【Mentor】密码重置令牌"
     msg["From"] = from_addr
     msg["To"] = to_addr
     msg["Reply-To"] = from_addr
@@ -478,21 +484,7 @@ def _send_password_reset_sendgrid(to_addr: str, username: str, token: str) -> bo
         print(f"[PASSWORD_RESET] SendGrid: invalid sender address {from_addr!r}.")
         return False
 
-    link = _magic_reset_url(username, token)
-    plain = (
-        f"您好，{username}\n\n"
-        f"您正在重置 Mentor 账户密码。请在浏览器中打开以下链接（20 分钟内有效，仅可使用一次）：\n\n"
-        f"{link}\n\n"
-        f"若收件箱没有本邮件，请到垃圾箱查找。\n\n"
-        f"若不是你本人操作，请忽略本邮件。\n"
-    )
-    html = (
-        f"<p>您好，{username}</p>"
-        f"<p>您正在重置 Mentor 账户密码。请点击下方链接（20 分钟内有效，仅可使用一次）：</p>"
-        f'<p><a href="{link}">{link}</a></p>'
-        f"<p>若收件箱没有本邮件，请到垃圾箱查找。</p>"
-        f"<p>若不是你本人操作，请忽略本邮件。</p>"
-    )
+    plain, html = _password_reset_token_content(token)
 
     try:
         from sendgrid import SendGridAPIClient
@@ -506,7 +498,7 @@ def _send_password_reset_sendgrid(to_addr: str, username: str, token: str) -> bo
         message = Mail(
             from_email=from_email_obj,
             to_emails=to_addr,
-            subject="【Mentor】密码重置验证",
+            subject="【Mentor】密码重置令牌",
             plain_text_content=plain,
             html_content=html,
         )
@@ -586,25 +578,11 @@ def _send_password_reset_resend(to_addr: str, username: str, token: str) -> bool
             "但未设置 PASSWORD_RESET_RESEND_FROM 或 RESEND_FROM（须在 Resend 控制台验证过的发件地址）。"
         )
         return False
-    link = _magic_reset_url(username, token)
-    plain = (
-        f"您好，{username}\n\n"
-        f"您正在重置 Mentor 账户密码。请在浏览器中打开以下链接（20 分钟内有效，仅可使用一次）：\n\n"
-        f"{link}\n\n"
-        f"若收件箱没有本邮件，请到垃圾箱查找。\n\n"
-        f"若不是你本人操作，请忽略本邮件。\n"
-    )
-    html = (
-        f"<p>您好，{username}</p>"
-        f"<p>您正在重置 Mentor 账户密码。请点击下方链接（20 分钟内有效，仅可使用一次）：</p>"
-        f'<p><a href="{link}">{link}</a></p>'
-        f"<p>若收件箱没有本邮件，请到垃圾箱查找。</p>"
-        f"<p>若不是你本人操作，请忽略本邮件。</p>"
-    )
+    plain, html = _password_reset_token_content(token)
     send_params = {
         "from": from_addr,
         "to": [to_addr],
-        "subject": "【Mentor】密码重置验证",
+        "subject": "【Mentor】密码重置令牌",
         "text": plain,
         "html": html,
     }
@@ -729,7 +707,7 @@ class _SMTPSSLPreferIPv4(smtplib.SMTP_SSL):
 
 
 def _send_password_reset_email(to_addr: str, username: str, token: str) -> bool:
-    """使用环境变量中的 SMTP 发送重置链接；失败返回 False（由调用方改打控制台）。"""
+    """使用环境变量中的 SMTP 发送重置令牌；失败返回 False（由调用方改打控制台）。"""
     host = os.getenv("PASSWORD_RESET_SMTP_HOST", "").strip()
     if not host:
         return False
@@ -741,24 +719,9 @@ def _send_password_reset_email(to_addr: str, username: str, token: str) -> bool:
         print("[PASSWORD_RESET] 未设置 PASSWORD_RESET_SMTP_FROM 且 SMTP_USER 非邮箱，无法发信；请设置发件人地址（建议与 SMTP 登录账号一致）。")
         return False
     use_tls = os.getenv("PASSWORD_RESET_SMTP_USE_TLS", "1").strip().lower() not in ("0", "false", "no")
-    link = _magic_reset_url(username, token)
-    plain = (
-        f"您好，{username}\n\n"
-        f"您正在重置 Mentor 账户密码。请在浏览器中打开以下链接（20 分钟内有效，仅可使用一次）：\n\n"
-        f"{link}\n\n"
-        f"若收件箱没有本邮件，请到垃圾箱、订阅邮件里查找；仍没有可到 QQ 邮箱网页版自助查询收信。\n\n"
-        f"若不是你本人操作，请忽略本邮件。\n"
-    )
-    html = (
-        f"<p>您好，{username}</p>"
-        f"<p>您正在重置 Mentor 账户密码。请点击下方链接（20 分钟内有效，仅可使用一次）：</p>"
-        f'<p><a href="{link}">{link}</a></p>'
-        f"<p>若收件箱没有本邮件，请到 <strong>垃圾箱</strong>、<strong>订阅邮件</strong> 里查找；"
-        f"仍没有可到 QQ 邮箱网页版 → <strong>自助查询</strong> → 收信查询。</p>"
-        f"<p>若不是你本人操作，请忽略本邮件。</p>"
-    )
+    plain, html = _password_reset_token_content(token)
     msg = EmailMessage()
-    msg["Subject"] = "【Mentor】密码重置验证"
+    msg["Subject"] = "【Mentor】密码重置令牌"
     msg["From"] = sender
     msg["To"] = to_addr
     msg["Reply-To"] = sender
@@ -812,7 +775,7 @@ def _send_password_reset_email(to_addr: str, username: str, token: str) -> bool:
         print(
             f"[PASSWORD_RESET] SMTP 发送失败: {exc}\n"
             "  常见原因：端口与加密方式不匹配（587+STARTTLS / 465+SSL）、须使用「授权码」而非登录密码、"
-            "发件人 PASSWORD_RESET_SMTP_FROM 与 SMTP 登录邮箱不一致被拒、PUBLIC_APP_URL 错误不影响投递但链接会无效。"
+            "发件人 PASSWORD_RESET_SMTP_FROM 与 SMTP 登录邮箱不一致被拒。"
             f"{extra}"
         )
         return False
@@ -906,7 +869,6 @@ def _deliver_password_reset_notification(username: str, token: str, user_email: 
 
 def _log_reset_to_console(username: str, token: str, mail_skip_reason: str = "") -> None:
     """令牌不出现在 HTTP 响应中；仅在未发邮件时打印，便于本机自助重置。"""
-    link = _magic_reset_url(username, token)
     why = (
         f"\n【未发邮件原因】\n{mail_skip_reason.strip()}\n"
         if mail_skip_reason.strip()
@@ -917,7 +879,6 @@ def _log_reset_to_console(username: str, token: str, mail_skip_reason: str = "")
         f"{why}"
         f"用户名: {username}\n"
         f"令牌: {token}\n"
-        f"一键链接（复制到浏览器地址栏）:\n{link}\n"
         "====================================================\n"
     )
 
@@ -1674,7 +1635,7 @@ async def api_root():
         "docs": "/docs",
         "user_check": "/user-exists?username=你的用户名",
         "password_reset": {
-            "forgot_password": "POST /forgot-password（响应不含令牌；邮件或本机终端）",
+            "forgot_password": "POST /forgot-password（提交邮箱；响应不含令牌；邮件或本机终端）",
             "reset_password": "POST /reset-password",
             "env": "PUBLIC_APP_URL, PASSWORD_RESET_SMTP_HOST, PASSWORD_RESET_SMTP_PORT, PASSWORD_RESET_SMTP_USER, PASSWORD_RESET_SMTP_PASSWORD, PASSWORD_RESET_SMTP_FROM",
         },
@@ -1709,7 +1670,7 @@ class UserRegister(BaseModel):
     @field_validator("email")
     @classmethod
     def required_email(cls, v: str) -> str:
-        s = str(v).strip()
+        s = str(v).strip().lower()
         if not _EMAIL_RE.fullmatch(s):
             raise ValueError("邮箱格式不正确")
         return s
@@ -1721,11 +1682,19 @@ class UserRegister(BaseModel):
 
 
 class ForgotPasswordBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    email: str = Field(..., min_length=5, max_length=255)
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, v: str) -> str:
+        s = str(v).strip().lower()
+        if not _EMAIL_RE.fullmatch(s):
+            raise ValueError("邮箱格式不正确")
+        return s
 
 
 class ResetPasswordBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: Optional[str] = Field(default=None, min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
     reset_token: str = Field(..., min_length=16, max_length=128)
     password: str = Field(..., min_length=6, max_length=20)
 
@@ -1885,7 +1854,8 @@ async def check_user_path(username: str, db: Session = Depends(get_db)):
 async def register(user: UserRegister, db: Session = Depends(get_db)):
     if db.query(UserDB).filter(UserDB.username == user.username).first():
         raise HTTPException(status_code=400, detail="用户名已被占用")
-    if user.email and db.query(UserDB).filter(UserDB.email == user.email).first():
+    clean_email = user.email.strip().lower()
+    if db.query(UserDB).filter(func.lower(UserDB.email) == clean_email).first():
         raise HTTPException(status_code=400, detail="该邮箱已被其他账号绑定")
     log = logging.getLogger("uvicorn.error")
     try:
@@ -1901,7 +1871,7 @@ async def register(user: UserRegister, db: Session = Depends(get_db)):
             UserDB(
                 username=user.username,
                 password=hashed,
-                email=user.email,
+                email=clean_email,
             )
         )
         db.commit()
@@ -1924,8 +1894,8 @@ async def login(user: UserLogin, db: Session = Depends(get_db)):
 
 FORGOT_PASSWORD_PUBLIC_MESSAGE = {
     "message": (
-        "若该用户名已注册，我们已受理密码重置请求。"
-        "若账号登记过邮箱，请查收该邮箱（含垃圾箱、订阅邮件）中的链接。"
+        "若该邮箱已绑定账号，我们已受理密码重置请求。"
+        "请查收该邮箱（含垃圾箱、订阅邮件）中的重置令牌。"
         "若迟迟收不到，可在邮箱内搜索「Mentor」或「重置」，或稍后再试。"
     ),
     "expires_in_minutes": 20,
@@ -1941,12 +1911,12 @@ async def forgot_password(
 ):
     """
     签发短时重置令牌：绝不把明文令牌放进 HTTP 响应。
-    - 已绑定邮箱且配置 SMTP：尝试发邮件（链接指向前端 PUBLIC_APP_URL）。
-    - 否则：仅写入数据库哈希，并在**运行后端的本机终端**打印令牌与链接。
-    - 用户名不存在时返回与成功相同的 JSON，降低用户名枚举风险。
+    - 按邮箱查找账号并发送纯令牌邮件，不发送一键链接。
+    - 否则：仅写入数据库哈希，并在**运行后端的本机终端**打印令牌。
+    - 邮箱不存在时返回与成功相同的 JSON，降低账号枚举风险。
     """
     _enforce_forgot_rate_limit(request)
-    user = db.query(UserDB).filter(UserDB.username == body.username).first()
+    user = db.query(UserDB).filter(func.lower(UserDB.email) == body.email).first()
     if not user:
         return FORGOT_PASSWORD_PUBLIC_MESSAGE
 
@@ -1966,29 +1936,30 @@ async def forgot_password(
 
 @app.post("/reset-password")
 async def reset_password(body: ResetPasswordBody, db: Session = Depends(get_db)):
-    user = db.query(UserDB).filter(UserDB.username == body.username).first()
-    if not user:
-        raise HTTPException(status_code=400, detail="用户名或令牌无效")
     raw = body.reset_token.strip()
     token_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     row = (
         db.query(PasswordResetTokenDB)
-        .filter(
-            PasswordResetTokenDB.user_id == user.id,
-            PasswordResetTokenDB.token_hash == token_hash,
-        )
+        .filter(PasswordResetTokenDB.token_hash == token_hash)
         .first()
     )
     if not row:
-        raise HTTPException(status_code=400, detail="用户名或令牌无效")
+        raise HTTPException(status_code=400, detail="令牌无效")
     if row.expires_at < datetime.utcnow():
         db.delete(row)
         db.commit()
         raise HTTPException(status_code=400, detail="令牌已过期，请重新获取")
+    user = db.query(UserDB).filter(UserDB.id == row.user_id).first()
+    if not user:
+        db.delete(row)
+        db.commit()
+        raise HTTPException(status_code=400, detail="令牌无效")
+    if body.username and body.username != user.username:
+        raise HTTPException(status_code=400, detail="令牌无效")
     user.password = pwd_context.hash(body.password)
     db.query(PasswordResetTokenDB).filter(PasswordResetTokenDB.user_id == user.id).delete()
     db.commit()
-    return {"message": "密码已重置，请使用新密码登录"}
+    return {"message": "密码已重置，请使用新密码登录", "username": user.username}
 
 
 @app.get("/courses/{course_id}")
