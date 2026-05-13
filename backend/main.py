@@ -285,10 +285,8 @@ def ensure_schema():
 ensure_schema()
 
 
-# --- 找回密码：限流（防刷接口 / 枚举）---
-_FORGOT_ATTEMPTS: defaultdict[str, list[float]] = defaultdict(list)
-_FORGOT_WINDOW_SEC = 15 * 60
-_FORGOT_MAX_PER_WINDOW = 8
+# --- 认证接口限流（防刷接口 / 枚举 / 暴力尝试）---
+_AUTH_ATTEMPTS: defaultdict[str, list[float]] = defaultdict(list)
 
 
 def _client_ip(request: Request) -> str:
@@ -300,14 +298,37 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
-def _enforce_forgot_rate_limit(request: Request) -> None:
+def _enforce_auth_rate_limit(
+    request: Request,
+    action: str,
+    *,
+    max_attempts: int,
+    window_sec: int,
+) -> None:
     ip = _client_ip(request)
     now = time()
-    arr = _FORGOT_ATTEMPTS[ip]
-    arr[:] = [t for t in arr if now - t < _FORGOT_WINDOW_SEC]
-    if len(arr) >= _FORGOT_MAX_PER_WINDOW:
+    key = f"{action}:{ip}"
+    arr = _AUTH_ATTEMPTS[key]
+    arr[:] = [t for t in arr if now - t < window_sec]
+    if len(arr) >= max_attempts:
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
     arr.append(now)
+
+
+def _enforce_register_rate_limit(request: Request) -> None:
+    _enforce_auth_rate_limit(request, "register", max_attempts=6, window_sec=60 * 60)
+
+
+def _enforce_login_rate_limit(request: Request) -> None:
+    _enforce_auth_rate_limit(request, "login", max_attempts=20, window_sec=15 * 60)
+
+
+def _enforce_forgot_rate_limit(request: Request) -> None:
+    _enforce_auth_rate_limit(request, "forgot", max_attempts=8, window_sec=15 * 60)
+
+
+def _enforce_reset_rate_limit(request: Request) -> None:
+    _enforce_auth_rate_limit(request, "reset", max_attempts=12, window_sec=15 * 60)
 
 
 def _public_app_url() -> str:
@@ -1646,6 +1667,11 @@ class UserLogin(BaseModel):
     username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
     password: str = Field(..., min_length=1, max_length=128)
 
+    @field_validator("username", mode="before")
+    @classmethod
+    def trim_username(cls, v: str) -> str:
+        return str(v).strip()
+
 
 def assert_password_strength(v: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9]+", v):
@@ -1666,6 +1692,11 @@ class UserRegister(BaseModel):
     username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
     password: str = Field(..., min_length=6, max_length=20)
     email: str = Field(..., min_length=5, max_length=255)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def trim_username(cls, v: str) -> str:
+        return str(v).strip()
 
     @field_validator("email")
     @classmethod
@@ -1697,6 +1728,11 @@ class ResetPasswordBody(BaseModel):
     username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
     reset_token: str = Field(..., min_length=16, max_length=128)
     password: str = Field(..., min_length=6, max_length=20)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def trim_username(cls, v: str) -> str:
+        return str(v).strip()
 
     @field_validator("password")
     @classmethod
@@ -1855,20 +1891,24 @@ async def user_exists(
     db: Session = Depends(get_db),
 ):
     """供前端判断：用户名已存在则走登录，否则走注册（Query 形式，避免路径 404 歧义）。"""
-    row = db.query(UserDB).filter(UserDB.username == username).first()
+    clean_username = username.strip()
+    row = db.query(UserDB).filter(func.lower(UserDB.username) == clean_username.lower()).first()
     return {"exists": row is not None}
 
 
 @app.get("/check-user/{username}")
 async def check_user_path(username: str, db: Session = Depends(get_db)):
     """兼容旧前端路径：与 /user-exists 相同语义。"""
-    row = db.query(UserDB).filter(UserDB.username == username).first()
+    clean_username = username.strip()
+    row = db.query(UserDB).filter(func.lower(UserDB.username) == clean_username.lower()).first()
     return {"exists": row is not None}
 
 
 @app.post("/register")
-async def register(user: UserRegister, db: Session = Depends(get_db)):
-    if db.query(UserDB).filter(UserDB.username == user.username).first():
+async def register(user: UserRegister, request: Request, db: Session = Depends(get_db)):
+    _enforce_register_rate_limit(request)
+    clean_username = user.username.strip()
+    if db.query(UserDB).filter(func.lower(UserDB.username) == clean_username.lower()).first():
         raise HTTPException(status_code=400, detail="用户名已被占用")
     clean_email = user.email.strip().lower()
     if db.query(UserDB).filter(func.lower(UserDB.email) == clean_email).first():
@@ -1885,7 +1925,7 @@ async def register(user: UserRegister, db: Session = Depends(get_db)):
     try:
         db.add(
             UserDB(
-                username=user.username,
+                username=clean_username,
                 password=hashed,
                 email=clean_email,
             )
@@ -1901,8 +1941,10 @@ async def register(user: UserRegister, db: Session = Depends(get_db)):
     return {"message": "注册成功"}
 
 @app.post("/login")
-async def login(user: UserLogin, db: Session = Depends(get_db)):
-    db_user = db.query(UserDB).filter(UserDB.username == user.username).first()
+async def login(user: UserLogin, request: Request, db: Session = Depends(get_db)):
+    _enforce_login_rate_limit(request)
+    clean_username = user.username.strip()
+    db_user = db.query(UserDB).filter(func.lower(UserDB.username) == clean_username.lower()).first()
     if not db_user or not pwd_context.verify(user.password, str(db_user.password)):
         raise HTTPException(status_code=400, detail="用户名或密码错误")
     return {"message": "登录成功", "username": db_user.username}
@@ -1951,7 +1993,8 @@ async def forgot_password(
 
 
 @app.post("/reset-password")
-async def reset_password(body: ResetPasswordBody, db: Session = Depends(get_db)):
+async def reset_password(body: ResetPasswordBody, request: Request, db: Session = Depends(get_db)):
+    _enforce_reset_rate_limit(request)
     raw = body.reset_token.strip()
     token_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     row = (
@@ -1971,8 +2014,12 @@ async def reset_password(body: ResetPasswordBody, db: Session = Depends(get_db))
         db.commit()
         raise HTTPException(status_code=400, detail="令牌无效")
     new_username = body.username.strip()
-    if new_username != user.username:
-        exists = db.query(UserDB).filter(UserDB.username == new_username, UserDB.id != user.id).first()
+    if new_username.lower() != user.username.lower():
+        exists = (
+            db.query(UserDB)
+            .filter(func.lower(UserDB.username) == new_username.lower(), UserDB.id != user.id)
+            .first()
+        )
         if exists:
             raise HTTPException(status_code=400, detail="该昵称已被占用，请换一个")
     user.username = new_username

@@ -309,6 +309,7 @@ const LoginView = ({ onLoginSuccess }) => {
   };
 
   const handleAuthSubmit = async () => {
+    if (loading) return;
     const cleanUsername = username.trim();
     const cleanPassword = password.trim();
     const cleanConfirm = confirmPassword.trim();
@@ -490,6 +491,22 @@ const LoginView = ({ onLoginSuccess }) => {
         setSuccessMsg(typeof data.message === 'string' ? data.message : '密码已重置，请使用新昵称和新密码登录');
       } else {
         const url = `${API_BASE}/${authStep}`;
+        if (authStep === 'register') {
+          const checkResponse = await fetch(
+            `${API_BASE}/user-exists?username=${encodeURIComponent(cleanUsername)}`
+          );
+          const checkData = await checkResponse.json().catch(() => ({}));
+          if (!checkResponse.ok) {
+            setErrorMsg(formatApiDetail(checkData) || '无法校验昵称是否可用，请稍后再试');
+            triggerShake();
+            return;
+          }
+          if (checkData.exists) {
+            setErrorMsg('该昵称已被占用，请换一个');
+            triggerShake();
+            return;
+          }
+        }
         const regBody =
           authStep === 'register'
             ? {
@@ -638,6 +655,7 @@ const LoginView = ({ onLoginSuccess }) => {
                     <input
                       type="email"
                       autoComplete="email"
+                      maxLength={255}
                       placeholder="注册时填写的邮箱"
                       value={forgotEmail}
                       onChange={(e) => {
@@ -654,6 +672,8 @@ const LoginView = ({ onLoginSuccess }) => {
                     <label className="mb-2 block text-[10px] pa-label text-[#1a1f24]/35 pa-motion-body">Nickname</label>
                     <input
                       type="text"
+                      autoComplete="username"
+                      maxLength={16}
                       placeholder={authStep === 'forgot-reset' ? '设置新昵称' : '昵称 (3-16位字母/数字/下划线)'}
                       value={username}
                       onChange={(e) => {
@@ -687,6 +707,7 @@ const LoginView = ({ onLoginSuccess }) => {
                     <label className="mb-2 block text-[10px] pa-label text-[#1a1f24]/35 pa-motion-body">Reset token</label>
                     <input
                       type="text"
+                      maxLength={128}
                       placeholder="粘贴重置令牌"
                       value={resetToken}
                       onChange={(e) => {
@@ -708,6 +729,7 @@ const LoginView = ({ onLoginSuccess }) => {
                       type="email"
                       autoComplete="email"
                       required
+                      maxLength={255}
                       placeholder="name@example.com"
                       value={regEmail}
                       onChange={(e) => {
@@ -727,6 +749,8 @@ const LoginView = ({ onLoginSuccess }) => {
                       <input
                         ref={passwordRef}
                         type={showPassword ? 'text' : 'password'}
+                        autoComplete={authStep === 'register' ? 'new-password' : 'current-password'}
+                        maxLength={authStep === 'register' ? 20 : 128}
                         placeholder={
                           authStep === 'register'
                             ? '密码：6-20位，大小写+数字'
@@ -787,6 +811,8 @@ const LoginView = ({ onLoginSuccess }) => {
                       <input
                         ref={passwordRef}
                         type={showPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        maxLength={20}
                         placeholder="新密码：6-20位，大小写+数字"
                         value={password}
                         onChange={(e) => {
@@ -809,6 +835,8 @@ const LoginView = ({ onLoginSuccess }) => {
                       <label className="mb-2 block text-[10px] pa-label text-[#1a1f24]/35 pa-motion-body">Confirm</label>
                       <input
                         type={showConfirmPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        maxLength={20}
                         placeholder="再次输入新密码"
                         value={confirmPassword}
                         onChange={(e) => {
