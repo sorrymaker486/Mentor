@@ -16,6 +16,16 @@ export function normalizeMathText(text) {
     /`([^`]*?(?:\\frac|\\lim|\\sum|\\int|\\sqrt|\\to|=|\^|_)[^`]*)`/g,
     (_, m) => m
   );
+  for (let i = 0; i < 3; i += 1) {
+    const next = t
+      .replace(
+        /(\\frac\{[^{}\n]+\}\{[^{}\n]+\}|\\sqrt\{[^{}\n]+\}|\\(?:lim|sum|int)[^$\n]{0,80})\$\1/g,
+        (_, m) => `$${m}$`
+      )
+      .replace(/(\\frac\{[^{}\n]+\})\$\1/g, (_, m) => m);
+    if (next === t) break;
+    t = next;
+  }
   return t;
 }
 

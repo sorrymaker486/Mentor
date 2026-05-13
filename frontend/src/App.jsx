@@ -78,6 +78,17 @@ const normalizeMathText = (text) => {
     (_, m) => m
   );
 
+  for (let i = 0; i < 3; i += 1) {
+    const next = t
+      .replace(
+        /(\\frac\{[^{}\n]+\}\{[^{}\n]+\}|\\sqrt\{[^{}\n]+\}|\\(?:lim|sum|int)[^$\n]{0,80})\$\1/g,
+        (_, m) => `$${m}$`
+      )
+      .replace(/(\\frac\{[^{}\n]+\})\$\1/g, (_, m) => m);
+    if (next === t) break;
+    t = next;
+  }
+
   return t;
 };
 
@@ -252,7 +263,7 @@ const formatApiDetail = (data) => {
 };
 
 const LoginView = ({ onLoginSuccess }) => {
-  const [authStep, setAuthStep] = useState('check');
+  const [authStep, setAuthStep] = useState('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -287,7 +298,7 @@ const LoginView = ({ onLoginSuccess }) => {
   }, []);
 
   useEffect(() => {
-    if (authStep === 'check' || authStep === 'forgot') return;
+    if (authStep === 'forgot') return;
     const timer = setTimeout(() => passwordRef.current?.focus(), 120);
     return () => clearTimeout(timer);
   }, [authStep]);
@@ -309,19 +320,6 @@ const LoginView = ({ onLoginSuccess }) => {
     /* 注册 / 重置：仅大小写字母与数字，且须同时含大写、小写、数字；6-20 位 */
     const passwordRegisterRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z0-9]{6,20}$/;
     const emailRegex = /^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/;
-
-    if (authStep === 'check') {
-      if (!cleanUsername) {
-        setErrorMsg('请输入用户名');
-        triggerShake();
-        return;
-      }
-      if (!usernameRegex.test(cleanUsername)) {
-        setErrorMsg('用户名需为 3-16 位字母、数字或下划线');
-        triggerShake();
-        return;
-      }
-    }
 
     if (authStep === 'forgot') {
       if (tokenReady) {
@@ -365,6 +363,16 @@ const LoginView = ({ onLoginSuccess }) => {
     }
 
     if (authStep === 'login' || authStep === 'register') {
+      if (!cleanUsername) {
+        setErrorMsg('请输入昵称');
+        triggerShake();
+        return;
+      }
+      if (!usernameRegex.test(cleanUsername)) {
+        setErrorMsg('昵称需为 3-16 位字母、数字或下划线');
+        triggerShake();
+        return;
+      }
       if (!cleanPassword) {
         setErrorMsg('请输入密码');
         triggerShake();
@@ -392,28 +400,7 @@ const LoginView = ({ onLoginSuccess }) => {
     setSuccessMsg('');
 
     try {
-      if (authStep === 'check') {
-        const response = await fetch(
-          `${API_BASE}/user-exists?username=${encodeURIComponent(cleanUsername)}`
-        );
-        const data = await response.json().catch(() => ({}));
-
-        if (!response.ok) {
-          const hint404 =
-            '未找到接口（多为后端未重启或代码未加载）。请重启后端进程，并在 API 文档（/docs）中搜索 user-exists';
-          setErrorMsg(
-            response.status === 404 ? hint404 : formatApiDetail(data) || '无法校验用户名'
-          );
-          triggerShake();
-          return;
-        }
-
-        if (data.exists) {
-          setAuthStep('login');
-        } else {
-          setAuthStep('register');
-        }
-      } else if (authStep === 'forgot') {
+      if (authStep === 'forgot') {
         const ac = new AbortController();
         const tid = setTimeout(() => ac.abort(), 45000);
         let response;
@@ -599,9 +586,7 @@ const LoginView = ({ onLoginSuccess }) => {
                     Access
                   </div>
                   <div className="rounded-full border border-[#1a1f24]/[0.08] bg-[#f6f4ef]/90 px-3 py-1.5 text-[11px] font-medium tracking-wide text-[#1a1f24]/45">
-                    {authStep === 'check'
-                      ? '身份确认'
-                      : authStep === 'login'
+                    {authStep === 'login'
                         ? '登录通道'
                         : authStep === 'register'
                           ? '注册通道'
@@ -613,9 +598,7 @@ const LoginView = ({ onLoginSuccess }) => {
 
                 <div>
                   <h1 className="font-display text-4xl leading-tight text-[#1a1f24] md:text-[2.65rem] pa-motion-display pa-serif-breathe">
-                    {authStep === 'check'
-                      ? '你好，准备开始吧'
-                      : authStep === 'login'
+                    {authStep === 'login'
                         ? '欢迎回来'
                         : authStep === 'register'
                           ? '创建你的账户'
@@ -624,12 +607,10 @@ const LoginView = ({ onLoginSuccess }) => {
                             : '设置新密码'}
                   </h1>
                   <p className="mt-4 text-sm font-light leading-relaxed text-[#1a1f24]/50 md:text-[15px] pa-motion-body">
-                    {authStep === 'check'
-                      ? '输入用户名，系统会自动判断你是登录还是注册。'
-                      : authStep === 'login'
-                        ? '请输入密码继续进入学习空间。'
+                    {authStep === 'login'
+                        ? '请输入昵称和密码继续进入学习空间。'
                         : authStep === 'register'
-                          ? '该用户名可用。新密码须为 6-20 位，仅大小写字母与数字，且同时包含大写、小写与数字。邮箱必填，用于接收重置令牌。'
+                          ? '填写昵称、邮箱和密码创建账户。新密码须为 6-20 位，仅大小写字母与数字，且同时包含大写、小写与数字。'
                           : authStep === 'forgot'
                             ? tokenReady
                               ? resetHint ||
@@ -659,10 +640,10 @@ const LoginView = ({ onLoginSuccess }) => {
                   </div>
                 ) : authStep !== 'forgot-reset' ? (
                   <div>
-                    <label className="mb-2 block text-[10px] pa-label text-[#1a1f24]/35 pa-motion-body">Username</label>
+                    <label className="mb-2 block text-[10px] pa-label text-[#1a1f24]/35 pa-motion-body">Nickname</label>
                     <input
                       type="text"
-                      placeholder="用户名 (3-16位字母/数字/下划线)"
+                      placeholder="昵称 (3-16位字母/数字/下划线)"
                       value={username}
                       onChange={(e) => {
                         const val = e.target.value.replace(/[^a-zA-Z0-9_]/g, '');
@@ -857,9 +838,7 @@ const LoginView = ({ onLoginSuccess }) => {
                       )}
                       {loading
                         ? '处理中'
-                        : authStep === 'check'
-                          ? '继续'
-                          : authStep === 'login'
+                        : authStep === 'login'
                             ? '登录'
                             : authStep === 'register'
                               ? '注册并继续'
@@ -875,7 +854,7 @@ const LoginView = ({ onLoginSuccess }) => {
                     <button
                       type="button"
                       onClick={() => {
-                        setAuthStep('check');
+                        setAuthStep('register');
                         setPassword('');
                         setRegEmail('');
                         setForgotEmail('');
@@ -885,7 +864,7 @@ const LoginView = ({ onLoginSuccess }) => {
                       }}
                       className="w-full py-3 text-[12px] tracking-[0.18em] text-[#1a1f24]/38 transition-colors hover:text-[#1a1f24] uppercase"
                     >
-                      返回重新输入用户名
+                      创建新账户
                     </button>
                   )}
 
@@ -893,7 +872,7 @@ const LoginView = ({ onLoginSuccess }) => {
                     <button
                       type="button"
                       onClick={() => {
-                        setAuthStep('check');
+                        setAuthStep('login');
                         setPassword('');
                         setRegEmail('');
                         setForgotEmail('');
@@ -903,7 +882,7 @@ const LoginView = ({ onLoginSuccess }) => {
                       }}
                       className="w-full py-3 text-[12px] tracking-[0.18em] text-[#1a1f24]/38 transition-colors hover:text-[#1a1f24] uppercase"
                     >
-                      返回重新输入用户名
+                      返回登录
                     </button>
                   )}
 

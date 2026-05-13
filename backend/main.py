@@ -1782,6 +1782,22 @@ class ChapterQuizSubmitBody(BaseModel):
     answers: List[int] = Field(..., min_length=1, max_length=24)
 
 
+def clean_model_math_artifacts(text: str) -> str:
+    if not text:
+        return text
+    for _ in range(3):
+        new_text = re.sub(
+            r"(\\frac\{[^{}\n]+\}\{[^{}\n]+\}|\\sqrt\{[^{}\n]+\}|\\(?:lim|sum|int)[^$\n]{0,80})\$\1",
+            r"$\1$",
+            text,
+        )
+        new_text = re.sub(r"(\\frac\{[^{}\n]+\})\$\1", r"\1", new_text)
+        if new_text == text:
+            break
+        text = new_text
+    return text
+
+
 def collapse_repetition(text: str) -> str:
     if not text:
         return text
@@ -1792,7 +1808,7 @@ def collapse_repetition(text: str) -> str:
         if new_text == text:
             break
         text = new_text
-    return text.strip()
+    return clean_model_math_artifacts(text).strip()
 
 def safe_stream_delta(prev_clean: str, new_clean: str) -> str:
     if not prev_clean:
