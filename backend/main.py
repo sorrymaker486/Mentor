@@ -1694,7 +1694,7 @@ class ForgotPasswordBody(BaseModel):
 
 
 class ResetPasswordBody(BaseModel):
-    username: Optional[str] = Field(default=None, min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
     reset_token: str = Field(..., min_length=16, max_length=128)
     password: str = Field(..., min_length=6, max_length=20)
 
@@ -1970,12 +1970,20 @@ async def reset_password(body: ResetPasswordBody, db: Session = Depends(get_db))
         db.delete(row)
         db.commit()
         raise HTTPException(status_code=400, detail="令牌无效")
-    if body.username and body.username != user.username:
-        raise HTTPException(status_code=400, detail="令牌无效")
+    new_username = body.username.strip()
+    if new_username != user.username:
+        exists = db.query(UserDB).filter(UserDB.username == new_username, UserDB.id != user.id).first()
+        if exists:
+            raise HTTPException(status_code=400, detail="该昵称已被占用，请换一个")
+    user.username = new_username
     user.password = pwd_context.hash(body.password)
     db.query(PasswordResetTokenDB).filter(PasswordResetTokenDB.user_id == user.id).delete()
-    db.commit()
-    return {"message": "密码已重置，请使用新密码登录", "username": user.username}
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="该昵称已被占用，请换一个")
+    return {"message": "密码已重置，请使用新昵称和新密码登录", "username": user.username}
 
 
 @app.get("/courses/{course_id}")

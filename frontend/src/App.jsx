@@ -340,6 +340,16 @@ const LoginView = ({ onLoginSuccess }) => {
     }
 
     if (authStep === 'forgot-reset') {
+      if (!cleanUsername) {
+        setErrorMsg('请设置新昵称');
+        triggerShake();
+        return;
+      }
+      if (!usernameRegex.test(cleanUsername)) {
+        setErrorMsg('新昵称需为 3-16 位字母、数字或下划线');
+        triggerShake();
+        return;
+      }
       if (!cleanToken) {
         setErrorMsg('请输入重置令牌');
         triggerShake();
@@ -447,6 +457,7 @@ const LoginView = ({ onLoginSuccess }) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            username: cleanUsername,
             reset_token: cleanToken,
             password: cleanPassword,
           }),
@@ -476,7 +487,7 @@ const LoginView = ({ onLoginSuccess }) => {
         setForgotEmail('');
         setShowPassword(false);
         setShowConfirmPassword(false);
-        setSuccessMsg(typeof data.message === 'string' ? data.message : '密码已重置，请使用新密码登录');
+        setSuccessMsg(typeof data.message === 'string' ? data.message : '密码已重置，请使用新昵称和新密码登录');
       } else {
         const url = `${API_BASE}/${authStep}`;
         const regBody =
@@ -616,7 +627,7 @@ const LoginView = ({ onLoginSuccess }) => {
                               ? resetHint ||
                                 '系统不会在网页上显示令牌。请查收注册邮箱（含垃圾箱），复制邮件中的令牌继续完成重置。'
                               : '提交注册邮箱后，若该邮箱已绑定账号，我们会发送一枚重置令牌（约 20 分钟内有效）。'
-                            : '粘贴邮件中的重置令牌，并设置符合规则的新密码。'}
+                            : '设置新昵称，粘贴邮件中的重置令牌，并设置符合规则的新密码。'}
                   </p>
                 </div>
 
@@ -638,12 +649,12 @@ const LoginView = ({ onLoginSuccess }) => {
                       className="pa-motion-ui w-full border border-[#1a1f24]/[0.1] bg-[#faf9f7] px-4 py-4 text-[15px] font-medium outline-none transition-all duration-500 placeholder:text-[#1a1f24]/22 focus:border-[#b8955c]/55 focus:bg-white focus:shadow-[0_0_0_1px_rgba(184,149,92,0.2)]"
                     />
                   </div>
-                ) : authStep !== 'forgot-reset' ? (
+                ) : (
                   <div>
                     <label className="mb-2 block text-[10px] pa-label text-[#1a1f24]/35 pa-motion-body">Nickname</label>
                     <input
                       type="text"
-                      placeholder="昵称 (3-16位字母/数字/下划线)"
+                      placeholder={authStep === 'forgot-reset' ? '设置新昵称' : '昵称 (3-16位字母/数字/下划线)'}
                       value={username}
                       onChange={(e) => {
                         const val = e.target.value.replace(/[^a-zA-Z0-9_]/g, '');
@@ -655,7 +666,7 @@ const LoginView = ({ onLoginSuccess }) => {
                       className="pa-motion-ui w-full border border-[#1a1f24]/[0.1] bg-[#faf9f7] px-4 py-4 text-[15px] font-medium outline-none transition-all duration-500 placeholder:text-[#1a1f24]/22 focus:border-[#b8955c]/55 focus:bg-white focus:shadow-[0_0_0_1px_rgba(184,149,92,0.2)]"
                     />
                   </div>
-                ) : null}
+                )}
 
                 {authStep === 'forgot' && tokenReady && (
                   <div className="space-y-2 border border-amber-200/90 bg-amber-50/90 px-4 py-3 text-sm leading-relaxed text-[#1a1f24]/80">
@@ -760,6 +771,7 @@ const LoginView = ({ onLoginSuccess }) => {
                         setResetHint('');
                         setRegEmail('');
                         setForgotEmail('');
+                        setUsername('');
                       }}
                       className="text-[12px] tracking-[0.12em] text-[#8a6f42] transition-colors hover:text-[#1a1f24]"
                     >
