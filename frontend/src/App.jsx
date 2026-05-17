@@ -548,7 +548,7 @@ const LoginView = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="pa-page relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
+    <div className="mentor-auth-page pa-page relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
       <div
         className="pa-orb pa-orb-1 -right-[12%] top-[-18%] h-[min(52vw,520px)] w-[min(52vw,520px)] bg-[radial-gradient(circle_at_center,rgba(184,149,92,0.35),transparent_68%)]"
         aria-hidden
@@ -599,7 +599,7 @@ const LoginView = ({ onLoginSuccess }) => {
 
         <section className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-4 py-6 md:px-8">
           <div className={`scrollbar-hide relative max-h-full w-full max-w-[440px] overflow-y-auto ${shake ? 'animate-[shake_0.45s_ease-in-out]' : ''}`}>
-            <div className="group relative overflow-hidden border border-[#1a1f24]/[0.07] bg-white/90 shadow-[0_28px_90px_rgba(26,31,36,0.08)] backdrop-blur-xl">
+            <div className="mentor-auth-panel group relative overflow-hidden border border-[#1a1f24]/[0.07] bg-white/90 shadow-[0_28px_90px_rgba(26,31,36,0.08)] backdrop-blur-xl">
               <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#b8955c]/50 to-transparent" />
               {/* PA 式四角装饰线 */}
               <div className="pa-corners" aria-hidden>
@@ -870,7 +870,7 @@ const LoginView = ({ onLoginSuccess }) => {
                   <button
                     onClick={handleAuthSubmit}
                     disabled={loading}
-                    className="pa-motion-ui group relative w-full overflow-hidden border border-[#1a1f24]/[0.12] bg-[#1a1f24] py-4 text-[12px] font-semibold tracking-[0.32em] text-[#faf9f7] transition-all duration-500 hover:-translate-y-0.5 hover:shadow-[0_20px_48px_rgba(26,31,36,0.18)] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                    className="mentor-primary-action pa-motion-ui group relative w-full overflow-hidden border border-[#1a1f24]/[0.12] bg-[#1a1f24] py-4 text-[12px] font-semibold tracking-[0.32em] text-[#faf9f7] transition-all duration-500 hover:-translate-y-0.5 hover:shadow-[0_20px_48px_rgba(26,31,36,0.18)] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0 disabled:hover:shadow-none"
                   >
                     <span className="absolute inset-0 translate-y-full bg-[#b8955c] transition-transform duration-500 group-hover:translate-y-0" />
                     <span className="relative z-10 flex items-center justify-center gap-3">
@@ -1008,7 +1008,7 @@ const SubjectGrid = ({ onSelectSubject, onLogout, username, apiBase }) => {
   ];
 
   return (
-    <div className="pa-page relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
+    <div className="mentor-subject-page pa-page relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
       <div className="pointer-events-none absolute inset-0 z-0">
         <ParticleField className="opacity-[0.26] mix-blend-multiply sm:opacity-[0.34]" areaScale={1.08} />
       </div>
@@ -1060,8 +1060,8 @@ const SubjectGrid = ({ onSelectSubject, onLogout, username, apiBase }) => {
       <main className="relative z-10 min-h-0 flex-1 overflow-hidden">
         <div className="pa-dashboard-bg-grid opacity-80" aria-hidden />
         <div className="pa-dashboard-edge-sheen hidden opacity-90 md:block" aria-hidden />
-        <div className="scrollbar-hide relative z-10 h-full min-h-0 overflow-y-auto">
-          <div className="mx-auto max-w-5xl px-5 pb-24 pt-10 md:px-10 md:pt-14 lg:px-12">
+        <div className="scrollbar-hide relative z-10 h-full min-h-0 overflow-hidden">
+          <div className="mx-auto flex h-full min-h-0 max-w-5xl flex-col px-5 pb-8 pt-8 md:px-10 md:pb-10 md:pt-10 lg:px-12">
             <p className="pa-label text-[10px] font-medium tracking-[0.34em] text-[#1a1f24]/38 uppercase">Curriculum</p>
             <h1 className="mt-3 font-display text-[clamp(1.65rem,4.2vw,2.65rem)] font-medium leading-[1.12] tracking-tight text-[#1a1f24] pa-motion-display">
               选择课程
@@ -1071,14 +1071,14 @@ const SubjectGrid = ({ onSelectSubject, onLogout, username, apiBase }) => {
               以下五个模块为对话式学习入口，点按卡片即可开始。
             </p>
 
-            <ul className="mt-12 space-y-4 sm:mt-14 md:space-y-5">
+            <ul className="mentor-subject-list mt-8 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:mt-9 md:space-y-5">
               {subjects.map((s, idx) => (
                 <Reveal key={s.id} snappy delay={idx * 18}>
                   <li>
                     <button
                       type="button"
                       onClick={() => onSelectSubject(s.name)}
-                      className="group relative w-full overflow-hidden rounded-sm border border-[#1a1f24]/[0.08] bg-white/80 text-left shadow-[0_6px_22px_rgba(26,31,36,0.04)] backdrop-blur-sm transition-all duration-500 ease-out hover:-translate-y-0.5 hover:border-[#b8955c]/32 hover:shadow-[0_18px_46px_rgba(26,31,36,0.1)]"
+                      className="mentor-subject-card group relative w-full overflow-hidden rounded-sm border border-[#1a1f24]/[0.08] bg-white/80 text-left shadow-[0_6px_22px_rgba(26,31,36,0.04)] backdrop-blur-sm transition-all duration-500 ease-out hover:-translate-y-0.5 hover:border-[#b8955c]/32 hover:shadow-[0_18px_46px_rgba(26,31,36,0.1)]"
                     >
                       <div className="pa-hline-runner absolute inset-x-0 top-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100" aria-hidden />
                       <svg className="pa-frame-svg" preserveAspectRatio="none" viewBox="0 0 100 100" aria-hidden>
@@ -2120,7 +2120,10 @@ const ChatView = ({ subject, username, onBack }) => {
   const quizResult = quizModal?.result || null;
 
   return (
-    <div className="pa-page flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
+    <div className="mentor-studio-page pa-page relative flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
+      <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+        <ParticleField className="opacity-[0.16] mix-blend-multiply" areaScale={1.18} />
+      </div>
       <aside className="relative flex h-full min-h-0 w-72 flex-shrink-0 flex-col border-r border-[#1a1f24]/[0.08] bg-[#ebe8e0] sm:w-80">
         <div
           className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(184,149,92,0.14),transparent_52%)]"
@@ -2284,10 +2287,10 @@ const ChatView = ({ subject, username, onBack }) => {
               return (
                 <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                   <div
-                    className={`chat-prose max-w-[92%] border px-6 py-5 shadow-[0_16px_44px_rgba(26,31,36,0.05)] transition-all duration-700 ease-out ${
+                    className={`mentor-chat-bubble chat-prose max-w-[92%] border px-6 py-5 shadow-[0_16px_44px_rgba(26,31,36,0.05)] transition-all duration-700 ease-out ${
                       m.role === 'user'
-                        ? 'rounded-2xl rounded-br-sm border-[#1a1f24]/[0.1] bg-[#1a1f24] text-[#faf9f7]'
-                        : 'rounded-2xl rounded-tl-sm border-[#1a1f24]/[0.06] bg-white text-[#1a1f24]'
+                        ? 'mentor-chat-bubble-user rounded-2xl rounded-br-sm border-[#1a1f24]/[0.1] bg-[#1a1f24] text-[#faf9f7]'
+                        : 'mentor-chat-bubble-assistant rounded-2xl rounded-tl-sm border-[#1a1f24]/[0.06] bg-white text-[#1a1f24]'
                     }`}
                   >
                     {m.role === 'user' ? (
@@ -2654,7 +2657,7 @@ const ChatView = ({ subject, username, onBack }) => {
 
       {quizModal && quizModal.questions?.length > 0 && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4" role="dialog" aria-modal="true">
-          <div className="max-h-[min(90vh,720px)] w-full max-w-2xl overflow-y-auto rounded-xl border border-[#1a1f24]/10 bg-[#faf9f7] p-6 shadow-2xl">
+          <div className="mentor-quiz-modal max-h-[min(90vh,720px)] w-full max-w-2xl overflow-y-auto rounded-xl border border-[#1a1f24]/10 bg-[#faf9f7] p-6 shadow-2xl">
             <h3 className="font-display text-lg text-[#1a1f24]">
               {quizResult ? '测验结果与解析' : quizModal.type === 'small' ? '小节学习总结测验' : '大章学习总结测验'}
             </h3>
@@ -2778,7 +2781,7 @@ export default function App() {
   return (
     <>
       {!introDone && <IntroLoader onComplete={() => setIntroDone(true)} />}
-      <div className="pa-page h-dvh max-h-dvh overflow-hidden bg-[#f6f4ef] text-[#1a1f24] antialiased">
+      <div className="mentor-shell pa-page h-dvh max-h-dvh overflow-hidden bg-[#f6f4ef] text-[#1a1f24] antialiased" data-app-step={appStep}>
       {appStep === 'login' && (
         <LoginView
           onLoginSuccess={(name) => {

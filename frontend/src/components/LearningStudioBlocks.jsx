@@ -21,7 +21,7 @@ const formatApiDetail = (data) => {
   return '';
 };
 
-/** 与后端 PORTRAIT_DIMENSION_KEYS 顺序一致，保证雷达顶点稳定 */
+/** 与后端 PORTRAIT_DIMENSION_KEYS 顺序一致，保证画像节点稳定 */
 const PORTRAIT_AXIS_ORDER = [
   '知识基础',
   '认知风格',
@@ -31,108 +31,189 @@ const PORTRAIT_AXIS_ORDER = [
   '兴趣与拓展倾向',
 ];
 
-function shortenLabel(s, max = 5) {
-  if (!s) return '';
-  return s.length <= max ? s : `${s.slice(0, max)}…`;
-}
+const portraitAxisLayout = [
+  { x: 100, y: 28, labelX: 100, labelY: 15 },
+  { x: 159, y: 62, labelX: 178, labelY: 50 },
+  { x: 158, y: 136, labelX: 179, labelY: 149 },
+  { x: 100, y: 170, labelX: 100, labelY: 188 },
+  { x: 42, y: 136, labelX: 22, labelY: 149 },
+  { x: 41, y: 62, labelX: 22, labelY: 50 },
+];
 
-/** 六维雷达（多边形） */
-function PortraitRadarChart({ dimensions }) {
-  const gradId = `pa-radar-grad-${useId().replace(/:/g, '')}`;
-  const cx = 100;
-  const cy = 100;
-  const maxR = 68;
-  const n = PORTRAIT_AXIS_ORDER.length;
+const portraitSatelliteOffsets = [
+  [
+    { dx: -17, dy: 18, bend: -7 },
+    { dx: 14, dy: 15, bend: 6 },
+    { dx: 2, dy: 32, bend: 4 },
+  ],
+  [
+    { dx: -23, dy: -1, bend: 5 },
+    { dx: -13, dy: 24, bend: -6 },
+    { dx: 12, dy: 14, bend: 4 },
+  ],
+  [
+    { dx: -16, dy: -21, bend: -5 },
+    { dx: -24, dy: 4, bend: 6 },
+    { dx: 8, dy: -14, bend: -4 },
+  ],
+  [
+    { dx: -14, dy: -21, bend: 5 },
+    { dx: 15, dy: -19, bend: -5 },
+    { dx: 0, dy: -35, bend: -3 },
+  ],
+  [
+    { dx: 18, dy: -20, bend: -5 },
+    { dx: 24, dy: 4, bend: 6 },
+    { dx: -8, dy: -12, bend: 4 },
+  ],
+  [
+    { dx: 19, dy: 2, bend: 5 },
+    { dx: 14, dy: 24, bend: -6 },
+    { dx: -10, dy: 13, bend: -4 },
+  ],
+];
 
-  const vertex = (radius, i) => {
-    const ang = -Math.PI / 2 + (2 * Math.PI * i) / n;
-    return { x: cx + radius * Math.cos(ang), y: cy + radius * Math.sin(ang) };
-  };
+const portraitMeshEdges = [
+  [0, 1, -10],
+  [1, 2, 7],
+  [2, 3, -8],
+  [3, 4, 8],
+  [4, 5, -7],
+  [5, 0, 10],
+  [0, 2, 12],
+  [1, 3, -12],
+  [2, 4, 10],
+  [3, 5, -10],
+  [4, 0, 8],
+  [5, 1, -8],
+];
 
-  const dataPoly = PORTRAIT_AXIS_ORDER.map((key, i) => {
-    const raw = dimensions?.[key]?.score;
-    const score = Math.max(0, Math.min(1, Number(raw) || 0.5));
-    const r = 0.12 * maxR + score * 0.88 * maxR;
-    const p = vertex(r, i);
-    return { ...p, key, score, label: key };
+const clampPortraitScore = (value) => Math.max(0, Math.min(1, Number(value) || 0.5));
+
+const profileToneLabel = (score) => {
+  if (score >= 0.74) return '优势';
+  if (score >= 0.56) return '稳定';
+  return '待巩固';
+};
+
+const curvePath = (start, end, bend = 0) => {
+  const midX = (start.x + end.x) / 2 + bend;
+  const midY = (start.y + end.y) / 2 - bend * 0.34;
+  return `M ${start.x} ${start.y} Q ${midX.toFixed(1)} ${midY.toFixed(1)} ${end.x} ${end.y}`;
+};
+
+/** 六维知识网络：用节点亮度、大小与曲线活跃度表达画像强弱，不直接打印数值。 */
+function PortraitKnowledgeMap({ dimensions }) {
+  const gradId = `mentor-portrait-link-${useId().replace(/:/g, '')}`;
+  const axisNodes = PORTRAIT_AXIS_ORDER.map((key, index) => {
+    const score = clampPortraitScore(dimensions?.[key]?.score);
+    return { ...portraitAxisLayout[index], key, score, index };
   });
-  const dataPoints = dataPoly.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
 
-  const gridPolys = [0.25, 0.5, 0.75, 1].map((t) =>
-    Array.from({ length: n }, (_, i) => {
-      const p = vertex(t * maxR, i);
-      return `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
-    }).join(' ')
+  const satellites = axisNodes.flatMap((node, axisIndex) =>
+    portraitSatelliteOffsets[axisIndex].map((offset, satelliteIndex) => ({
+      x: node.x + offset.dx,
+      y: node.y + offset.dy,
+      bend: offset.bend,
+      score: node.score,
+      axisIndex,
+      key: `${node.key}-${satelliteIndex}`,
+    }))
   );
 
-  const axisLines = PORTRAIT_AXIS_ORDER.map((_, i) => {
-    const p = vertex(maxR, i);
-    return { x1: cx, y1: cy, x2: p.x, y2: p.y, i };
-  });
-
-  const labelR = maxR + 26;
-  const labels = PORTRAIT_AXIS_ORDER.map((key, i) => {
-    const ang = -Math.PI / 2 + (2 * Math.PI * i) / n;
-    return {
-      key,
-      x: cx + labelR * Math.cos(ang),
-      y: cy + labelR * Math.sin(ang),
-      short: shortenLabel(key, 4),
-    };
-  });
-
   return (
-    <div className="flex w-full flex-col items-center gap-3">
-      <svg
-        viewBox="0 0 200 200"
-        className="h-[168px] w-[168px] shrink-0 text-[#1a1f24]/55"
-        role="img"
-        aria-label="六维学习画像雷达图"
-      >
+    <div className="portrait-network" aria-label="六维学习画像知识网络">
+      <svg viewBox="0 0 200 200" role="img">
         <defs>
           <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="rgba(184,149,92,0.55)" />
-            <stop offset="100%" stopColor="rgba(184,149,92,0.12)" />
+            <stop offset="0%" stopColor="rgba(142,168,186,0.22)" />
+            <stop offset="58%" stopColor="rgba(142,168,186,0.76)" />
+            <stop offset="100%" stopColor="rgba(194,170,143,0.58)" />
           </linearGradient>
         </defs>
-        {gridPolys.map((points, gi) => (
-          <polygon
-            key={gi}
-            points={points}
-            fill="none"
-            stroke="rgba(26,31,36,0.08)"
-            strokeWidth={gi === 3 ? 1.2 : 0.75}
+        <circle className="portrait-network-core-halo" cx="100" cy="100" r="28" />
+        {portraitMeshEdges.map(([from, to, bend], index) => {
+          const a = axisNodes[from];
+          const b = axisNodes[to];
+          const score = (a.score + b.score) / 2;
+          return (
+            <path
+              key={`axis-${from}-${to}`}
+              className="portrait-network-link"
+              d={curvePath(a, b, bend)}
+              pathLength="100"
+              style={{
+                stroke: `url(#${gradId})`,
+                '--portrait-alpha': 0.18 + score * 0.38,
+                '--portrait-width': 0.42 + score * 1.02,
+                '--portrait-flow': `${34 + score * 54}`,
+                animationDelay: `${index * -0.34}s`,
+              }}
+            />
+          );
+        })}
+        {satellites.map((point, index) => {
+          const axis = axisNodes[point.axisIndex];
+          return (
+            <path
+              key={`satellite-link-${point.key}`}
+              className="portrait-network-link portrait-network-link-soft"
+              d={curvePath(axis, point, point.bend)}
+              pathLength="100"
+              style={{
+                stroke: `url(#${gradId})`,
+                '--portrait-alpha': 0.1 + point.score * 0.32,
+                '--portrait-width': 0.28 + point.score * 0.62,
+                '--portrait-flow': `${20 + point.score * 44}`,
+                animationDelay: `${index * -0.18}s`,
+              }}
+            />
+          );
+        })}
+        <circle className="portrait-network-core" cx="100" cy="100" r="4.6" />
+        {satellites.map((point, index) => (
+          <circle
+            key={point.key}
+            className="portrait-network-satellite"
+            cx={point.x}
+            cy={point.y}
+            r={1.15 + point.score * 2.05}
+            style={{
+              '--portrait-alpha': 0.2 + point.score * 0.56,
+              animationDelay: `${index * -0.22}s`,
+            }}
           />
         ))}
-        {axisLines.map((ln) => (
-          <line key={ln.i} x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2} stroke="rgba(26,31,36,0.1)" strokeWidth={0.75} />
-        ))}
-        <polygon points={dataPoints} fill={`url(#${gradId})`} stroke="rgba(184,149,92,0.85)" strokeWidth={1.35} strokeLinejoin="round" />
-        {dataPoly.map((p) => (
-          <circle key={p.key} cx={p.x} cy={p.y} r={3.2} fill="#faf9f7" stroke="rgba(184,149,92,0.95)" strokeWidth={1.2} />
-        ))}
-        {labels.map((lb) => (
-          <text
-            key={lb.key}
-            x={lb.x}
-            y={lb.y}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            className="fill-[#1a1f24]/48"
-            style={{ fontSize: '9px', fontWeight: 600 }}
-          >
-            {lb.short}
-          </text>
+        {axisNodes.map((node, index) => (
+          <g key={node.key}>
+            <circle
+              className="portrait-network-node"
+              cx={node.x}
+              cy={node.y}
+              r={2.8 + node.score * 5.2}
+              style={{
+                '--portrait-alpha': 0.28 + node.score * 0.58,
+                animationDelay: `${index * -0.4}s`,
+              }}
+            />
+            <text
+              x={node.labelX}
+              y={node.labelY}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              className="portrait-network-label"
+            >
+              {node.key}
+            </text>
+          </g>
         ))}
       </svg>
-      <div className="grid w-full grid-cols-2 gap-x-2 gap-y-1.5 text-[10px] leading-snug text-[#1a1f24]/58">
-        {dataPoly.map((p) => (
-          <div key={p.key} className="flex min-w-0 items-baseline justify-between gap-1 border-b border-[#1a1f24]/[0.06] pb-1">
-            <span className="truncate font-medium text-[#1a1f24]/72" title={p.label}>
-              {p.label}
-            </span>
-            <span className="shrink-0 font-mono text-[#8a6f42]">{Math.round(p.score * 100)}</span>
-          </div>
+      <div className="portrait-network-legend">
+        {axisNodes.map((node) => (
+          <span key={node.key} className="portrait-network-chip" style={{ '--portrait-alpha': 0.2 + node.score * 0.5 }}>
+            <i />
+            {node.key}
+          </span>
         ))}
       </div>
     </div>
@@ -364,7 +445,7 @@ export function StudioPortraitCard({ apiBase, username, subject, sessionId, prog
       {err && <p className="mt-2 text-[11px] text-red-700">{err}</p>}
 
       <div className="mt-3 rounded-lg border border-[#1a1f24]/[0.06] bg-white/80 px-2 py-3">
-        <PortraitRadarChart dimensions={dimObj} />
+        <PortraitKnowledgeMap dimensions={dimObj} />
       </div>
 
       {portrait?.summary && (
@@ -376,12 +457,12 @@ export function StudioPortraitCard({ apiBase, username, subject, sessionId, prog
           {PORTRAIT_AXIS_ORDER.map((k) => {
             const v = dimObj[k] || {};
             const score = typeof v?.score === 'number' ? v.score : Number(v?.score) || 0.5;
-            const pct = Math.round(Math.max(0, Math.min(1, score)) * 100);
+            const tone = profileToneLabel(score);
             return (
               <li key={k} className="rounded-md border border-[#1a1f24]/[0.06] bg-white/70 px-3 py-2.5">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="text-[12px] font-semibold text-[#1a1f24]">{k}</span>
-                  <span className="font-mono text-[11px] text-[#8a6f42]">{pct}</span>
+                  <span className="font-mono text-[11px] text-[#8a6f42]">{tone}</span>
                 </div>
                 {v?.note && <p className="mt-1.5 text-[11px] leading-relaxed text-[#1a1f24]/52">{v.note}</p>}
               </li>

@@ -5,8 +5,10 @@
   overflow: hidden;
   pointer-events: auto;
   background:
-    radial-gradient(ellipse 88% 72% at 50% 50%, rgba(255, 255, 255, 0.5) 0%, transparent 58%),
-    linear-gradient(165deg, #f0ebe4 0%, #e8e2d8 50%, #e0d8ce 100%);
+    radial-gradient(ellipse 88% 72% at 50% 50%, rgba(255, 251, 239, 0.48) 0%, transparent 58%),
+    radial-gradient(circle at 17% 19%, rgba(194, 170, 143, 0.2), transparent 34%),
+    radial-gradient(circle at 82% 20%, rgba(142, 168, 186, 0.26), transparent 38%),
+    linear-gradient(165deg, #f7f3eb 0%, #edf4f3 52%, #f8efe4 100%);
 }
 
 .particles {
@@ -31,17 +33,17 @@
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
   line-height: 1;
-  color: rgba(26, 31, 36, 0.78);
-  text-shadow: 0 0 18px rgba(252, 250, 246, 0.9);
+  color: rgba(46, 53, 69, 0.72);
+  text-shadow: 0 0 18px rgba(255, 251, 239, 0.9);
   pointer-events: none;
   padding: 0.2rem 0.45rem;
   border-radius: 6px;
-  background: rgba(252, 250, 246, 0.45);
+  background: rgba(255, 251, 239, 0.36);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.5),
-    0 6px 20px rgba(26, 31, 36, 0.05);
+    0 0 0 1px rgba(142, 168, 186, 0.14),
+    0 6px 20px rgba(54, 68, 88, 0.045);
 }
 
 .root.exiting {

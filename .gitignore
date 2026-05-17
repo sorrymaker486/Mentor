@@ -5,6 +5,7 @@ backend/.venv/
 
 # Build / cache
 frontend/dist/
+frontend/output/
 dist/
 dist-ssr/
 __pycache__/
