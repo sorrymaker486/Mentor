@@ -81,7 +81,7 @@ export default function ParticleField({ className = '', areaScale = 1 }) {
       ctx.lineCap = 'round';
 
       /* 水平金线：整体缓慢下移 */
-      ctx.strokeStyle = 'rgba(142, 168, 186, 0.16)';
+      ctx.strokeStyle = 'rgba(184, 149, 92, 0.16)';
       ctx.lineWidth = 1;
       /* 间距大些，避免栅格过密引起不适 */
       const gapY = 92 + Math.sin(phase) * 14;
@@ -94,7 +94,7 @@ export default function ParticleField({ className = '', areaScale = 1 }) {
       }
 
       /* 垂直墨线：纯竖线缓慢横移，与水平正交 */
-      ctx.strokeStyle = 'rgba(46, 53, 69, 0.052)';
+      ctx.strokeStyle = 'rgba(26, 31, 36, 0.055)';
       ctx.lineWidth = 1;
       const gapX = 132;
       const offX = (t * 0.016) % gapX;
@@ -108,10 +108,10 @@ export default function ParticleField({ className = '', areaScale = 1 }) {
       /* 横向金色扫描带 */
       const scanY = (t * 0.045) % (height + 120) - 60;
       const g = ctx.createLinearGradient(0, scanY - 28, 0, scanY + 28);
-      g.addColorStop(0, 'rgba(142, 168, 186, 0)');
-      g.addColorStop(0.45, 'rgba(142, 168, 186, 0.34)');
-      g.addColorStop(0.55, 'rgba(194, 170, 143, 0.46)');
-      g.addColorStop(1, 'rgba(142, 168, 186, 0)');
+      g.addColorStop(0, 'rgba(184, 149, 92, 0)');
+      g.addColorStop(0.45, 'rgba(184, 149, 92, 0.38)');
+      g.addColorStop(0.55, 'rgba(212, 188, 136, 0.5)');
+      g.addColorStop(1, 'rgba(184, 149, 92, 0)');
       ctx.strokeStyle = g;
       ctx.lineWidth = 2.4;
       ctx.beginPath();
@@ -120,7 +120,7 @@ export default function ParticleField({ className = '', areaScale = 1 }) {
       ctx.stroke();
 
       /* 底部缓慢正弦波曲线 */
-      ctx.strokeStyle = 'rgba(194, 170, 143, 0.18)';
+      ctx.strokeStyle = 'rgba(184, 149, 92, 0.2)';
       ctx.lineWidth = 1.35;
       ctx.beginPath();
       const baseY = height * 0.78;
@@ -158,7 +158,7 @@ export default function ParticleField({ className = '', areaScale = 1 }) {
           const fall = 1 - d / LINK_DIST;
           const dep = (a.depth + b.depth) * 0.5;
           const alpha = fall * (0.28 + dep * 0.62);
-          ctx.strokeStyle = `rgba(142, 168, 186, ${alpha})`;
+          ctx.strokeStyle = `rgba(200, 172, 118, ${alpha})`;
           ctx.lineWidth = 0.7 + dep * 0.65;
           ctx.beginPath();
           ctx.moveTo(ax, ay);
@@ -180,7 +180,7 @@ export default function ParticleField({ className = '', areaScale = 1 }) {
 
         ctx.beginPath();
         ctx.arc(p.x + ox, p.y + oy, p.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(46, 53, 69, ${alphaInk})`;
+        ctx.fillStyle = `rgba(26, 31, 36, ${alphaInk})`;
         ctx.fill();
 
         ctx.beginPath();
@@ -191,12 +191,12 @@ export default function ParticleField({ className = '', areaScale = 1 }) {
           0,
           Math.PI * 2
         );
-        ctx.fillStyle = `rgba(194, 170, 143, ${alphaGold})`;
+        ctx.fillStyle = `rgba(212, 188, 136, ${alphaGold})`;
         ctx.fill();
 
         ctx.beginPath();
         ctx.arc(p.x + ox, p.y + oy, p.r * 1.65, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(142, 168, 186, ${0.06 + p.depth * 0.12})`;
+        ctx.fillStyle = `rgba(184, 149, 92, ${0.06 + p.depth * 0.12})`;
         ctx.fill();
       }
     };
@@ -208,18 +208,18 @@ export default function ParticleField({ className = '', areaScale = 1 }) {
       const r = Math.max(width, height) * 0.82;
 
       const rg = ctx.createRadialGradient(cx, cy, Math.min(width, height) * 0.06, cx, cy, r);
-      rg.addColorStop(0, 'rgba(247, 243, 235, 0)');
-      rg.addColorStop(0.55, 'rgba(247, 243, 235, 0.02)');
-      rg.addColorStop(0.88, 'rgba(237, 244, 243, 0.13)');
-      rg.addColorStop(1, 'rgba(194, 170, 143, 0.18)');
+      rg.addColorStop(0, 'rgba(246, 244, 239, 0)');
+      rg.addColorStop(0.55, 'rgba(246, 244, 239, 0.02)');
+      rg.addColorStop(0.88, 'rgba(232, 226, 214, 0.14)');
+      rg.addColorStop(1, 'rgba(214, 204, 188, 0.26)');
       ctx.fillStyle = rg;
       ctx.fillRect(0, 0, width, height);
 
       const lg = ctx.createLinearGradient(0, 0, 0, height);
-      lg.addColorStop(0, 'rgba(247, 243, 235, 0.1)');
-      lg.addColorStop(0.28, 'rgba(247, 243, 235, 0)');
-      lg.addColorStop(0.72, 'rgba(247, 243, 235, 0)');
-      lg.addColorStop(1, 'rgba(142, 168, 186, 0.14)');
+      lg.addColorStop(0, 'rgba(246, 244, 239, 0.1)');
+      lg.addColorStop(0.28, 'rgba(246, 244, 239, 0)');
+      lg.addColorStop(0.72, 'rgba(246, 244, 239, 0)');
+      lg.addColorStop(1, 'rgba(228, 220, 208, 0.16)');
       ctx.fillStyle = lg;
       ctx.fillRect(0, 0, width, height);
     };

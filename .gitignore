@@ -24,6 +24,7 @@ backend/.neon_database_url
 backend/users.db
 
 # Logs & OS / IDE
+_backups/
 logs/
 *.log
 npm-debug.log*

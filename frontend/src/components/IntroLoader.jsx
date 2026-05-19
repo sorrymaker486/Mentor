@@ -104,9 +104,9 @@ export default function IntroLoader({ onComplete }) {
         ctx.beginPath();
         ctx.arc(p.x, p.y, rr, 0, Math.PI * 2);
         if (p.kind === 'gold') {
-          ctx.fillStyle = `rgba(194, 170, 143, ${a})`;
+          ctx.fillStyle = `rgba(210, 182, 118, ${a})`;
         } else {
-          ctx.fillStyle = `rgba(46, 53, 69, ${a * 0.48})`;
+          ctx.fillStyle = `rgba(26, 31, 36, ${a * 0.55})`;
         }
         ctx.fill();
       }
@@ -127,19 +127,19 @@ export default function IntroLoader({ onComplete }) {
           const a = Math.min(0.92, tw + (atHead ? 0.28 : 0));
           ctx.beginPath();
           ctx.arc(x, yy, r, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(142, 168, 186, ${a})`;
+          ctx.fillStyle = `rgba(206, 176, 108, ${a})`;
           ctx.fill();
           if (atHead) {
             ctx.beginPath();
             ctx.arc(x, yy, r * 2.1, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(194, 170, 143, ${0.12 + 0.08 * Math.sin(elapsed * 4)})`;
+            ctx.fillStyle = `rgba(240, 214, 160, ${0.12 + 0.08 * Math.sin(elapsed * 4)})`;
             ctx.fill();
           }
         } else {
           const a = 0.06 + 0.035 * Math.sin(elapsed * 1.1 + x * 0.05);
           ctx.beginPath();
           ctx.arc(x, yy, 1.05, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(46, 53, 69, ${a})`;
+          ctx.fillStyle = `rgba(26, 31, 36, ${a})`;
           ctx.fill();
         }
       }

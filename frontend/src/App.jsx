@@ -6,6 +6,8 @@ import { markdownRemarkPlugins, markdownRehypePlugins } from './markdownMathSetu
 import HeroTitle from './components/hero-motion/HeroTitle';
 import ParticleField from './components/ParticleField';
 import IntroLoader from './components/IntroLoader';
+import DesignPreview, { AmbientField, CursorTrace } from './components/DesignPreview';
+import { decodeResourceMarkdownStream } from './utils/resourceStreamDecode';
 import {
   StudioMentorOverviewModal,
   StudioPortraitCard,
@@ -262,6 +264,321 @@ const formatApiDetail = (data) => {
   }
   return '';
 };
+
+const v29Subjects = [
+  ['高等数学', '极限与导数', 'active', 74],
+  ['线性代数', '矩阵空间', 'ready', 52],
+  ['概率统计', '随机变量', 'ready', 38],
+  ['机器学习', '梯度下降', 'active', 66],
+  ['数据结构', '图与搜索', 'ready', 45],
+  ['算法设计', '动态规划', 'next', 28],
+  ['操作系统', '进程同步', 'next', 34],
+  ['计算机网络', '拥塞控制', 'next', 31],
+];
+
+const v29CourseShowcase = [
+  ['CORE TRACK', '推导密度', '先从极限进入章节小测'],
+  ['SPACE MODEL', '结构清晰', '矩阵空间正在解锁'],
+  ['DATA SENSE', '样本直觉', '随机变量可直接进入'],
+  ['MODEL LAB', '参数更新', '梯度下降保持学习中'],
+  ['GRAPH PATH', '路径搜索', '图与搜索准备接入'],
+  ['STRATEGY', '拆解训练', '动态规划等待开启'],
+  ['SYSTEM', '并发节奏', '进程同步稍后进入'],
+  ['NETWORK', '传输链路', '拥塞控制待铺开'],
+];
+
+const v29MapNodes = [
+  ['core', 49, 49, '当前'],
+  ['a', 25, 28, '极限'],
+  ['b', 67, 25, '导数'],
+  ['c', 79, 54, '应用'],
+  ['d', 35, 70, '错因'],
+  ['e', 58, 78, '复习'],
+];
+
+const v29MapSmallNodes = [
+  [18, 45],
+  [30, 52],
+  [43, 23],
+  [53, 33],
+  [63, 63],
+  [73, 41],
+  [84, 72],
+  [22, 78],
+  [46, 84],
+  [72, 85],
+  [13, 65],
+  [90, 38],
+];
+
+const v29MapEdges = [
+  [49, 49, 25, 28],
+  [49, 49, 67, 25],
+  [67, 25, 79, 54],
+  [49, 49, 35, 70],
+  [35, 70, 58, 78],
+  [25, 28, 43, 23],
+  [67, 25, 73, 41],
+  [79, 54, 84, 72],
+  [58, 78, 72, 85],
+  [35, 70, 22, 78],
+];
+
+const v29PathItems = ['概念', '例题', '追问', '小测', '错因', '变式', '回顾', '总结'];
+
+const v29ResourceModes = [
+  ['course_digest', '精讲', '提炼当前小节的目标、公式与易错点。', 'warm'],
+  ['mind_map', '导图', '生成知识节点与关系结构。', 'cool'],
+  ['practice_pack', '练习', '按当前范围生成混合题型。', 'violet'],
+  ['extended_reading', '延展', '补充同主题阅读路径。', 'warm'],
+  ['code_lab', '实操', '把概念转成可运行任务。', 'cool'],
+  ['video_script', '微课', '整理成短视频讲解脚本。', 'violet'],
+];
+
+const V29PageShell = ({ children, variant = 'default' }) => (
+  <section className={`dp2-stage dp2-stage-${variant}`}>
+    <AmbientField dense={variant !== 'loading'} />
+    <div className="dp2-page-wipe" />
+    <div className="dp2-stage-inner">{children}</div>
+  </section>
+);
+
+const V29Button = ({ children, quiet = false, type = 'button', ...props }) => (
+  <button className={`dp2-button ${quiet ? 'is-quiet' : ''}`} type={type} {...props}>
+    <span>{children}</span>
+  </button>
+);
+
+const V29Field = ({ label, delay = 0, children }) => (
+  <label className="dp2-field" style={{ animationDelay: `${delay}ms` }}>
+    <span>{label}</span>
+    {children}
+  </label>
+);
+
+function V29LearningMap() {
+  const curve = ([x1, y1, x2, y2]) => {
+    const mx = (x1 + x2) / 2;
+    const my = (y1 + y2) / 2 - 9;
+    return `M${x1} ${y1} Q${mx} ${my} ${x2} ${y2}`;
+  };
+
+  return (
+    <div className="dp2-learning-map">
+      <svg viewBox="0 0 100 100" role="img" aria-label="学习画像知识网络">
+        {v29MapEdges.map((edge, index) => (
+          <path key={`edge-${index}`} className="dp2-map-edge" d={curve(edge)} style={{ animationDelay: `${index * 0.18}s` }} />
+        ))}
+        {v29MapSmallNodes.map(([x, y], index) => (
+          <circle key={`small-${index}`} className="dp2-map-small-node" cx={x} cy={y} r={index % 3 === 0 ? 1.7 : 1.1} />
+        ))}
+        {v29MapNodes.map(([id, x, y, label], index) => (
+          <g key={id} className={`dp2-map-node ${index === 0 ? 'is-core' : ''}`} style={{ animationDelay: `${index * 0.2}s` }}>
+            <circle cx={x} cy={y} r={index === 0 ? 4.4 : 3.2} />
+            <text x={x + 5} y={y - 4}>{label}</text>
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId, scopeLabel, onBack }) {
+  const [overview, setOverview] = useState(null);
+  const [activeKey, setActiveKey] = useState(v29ResourceModes[0][0]);
+  const [streamText, setStreamText] = useState('');
+  const [streamErr, setStreamErr] = useState('');
+  const [streaming, setStreaming] = useState(false);
+  const abortRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${apiBase}/learning/studio/overview`);
+        const j = await r.json().catch(() => ({}));
+        if (!cancelled && r.ok) setOverview(j);
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      try {
+        abortRef.current?.abort();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [apiBase]);
+
+  const resourceEntries = useMemo(() => {
+    const apiTypes = overview?.resource_types;
+    const fallback = v29ResourceModes.map(([key, title, desc, tone]) => ({ key, title, desc, tone }));
+    if (!apiTypes || typeof apiTypes !== 'object') return fallback;
+
+    const toneByKey = Object.fromEntries(v29ResourceModes.map(([key, , , tone]) => [key, tone]));
+    const descByKey = Object.fromEntries(v29ResourceModes.map(([key, , desc]) => [key, desc]));
+    const list = Object.entries(apiTypes).map(([key, value]) => ({
+      key,
+      title: value?.title || fallback.find((x) => x.key === key)?.title || key,
+      desc: value?.agent_chain || descByKey[key] || '按当前章节生成个性化资源。',
+      tone: toneByKey[key] || 'warm',
+    }));
+
+    return list.length ? list : fallback;
+  }, [overview]);
+
+  const activeEntry = resourceEntries.find((x) => x.key === activeKey) || resourceEntries[0];
+  const streamDisplay = useMemo(() => decodeResourceMarkdownStream(streamText), [streamText]);
+  const canGenerate = !!(chapterId && sectionId && activeEntry?.key);
+
+  const startResource = async (key = activeEntry?.key) => {
+    const nextKey = key || activeEntry?.key;
+    if (!nextKey) return;
+    setActiveKey(nextKey);
+    setStreamErr('');
+    setStreamText('');
+
+    if (!chapterId || !sectionId) {
+      setStreamErr('请先在学习页选择小节，再生成资源。');
+      return;
+    }
+
+    try {
+      abortRef.current?.abort();
+    } catch {
+      /* ignore */
+    }
+
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setStreaming(true);
+
+    try {
+      const r = await fetch(`${apiBase}/learning/studio/resources/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ac.signal,
+        body: JSON.stringify({
+          username,
+          subject,
+          chapter_id: chapterId,
+          section_id: sectionId,
+          resource_type: nextKey,
+          extra_hint: '',
+        }),
+      });
+
+      if (!r.ok) {
+        const t = await r.text().catch(() => '');
+        let msg = t;
+        try {
+          msg = formatApiDetail(JSON.parse(t)) || t;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(msg || `HTTP ${r.status}`);
+      }
+
+      if (!r.body) throw new Error('资源生成没有返回内容。');
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let acc = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        acc += decoder.decode(value, { stream: true });
+        setStreamText(acc);
+      }
+
+      acc += decoder.decode();
+      setStreamText(acc);
+    } catch (e) {
+      if (e?.name !== 'AbortError') setStreamErr(e?.message || '资源生成失败。');
+    } finally {
+      setStreaming(false);
+    }
+  };
+
+  return (
+    <V29PageShell variant="resources">
+      <div className="dp2-resources">
+        <section className="dp2-section-title">
+          <div className="dp2-mini-label">RESOURCE</div>
+          <h2>资源生成</h2>
+          <p>{scopeLabel ? `当前范围：${scopeLabel}` : '先回到学习页选择小节，再生成对应资源。'}</p>
+          <div className="dp2-actions">
+            <V29Button quiet onClick={onBack}>返回学习</V29Button>
+          </div>
+        </section>
+
+        <section className="dp2-resource-panel">
+          <div className="dp2-resource-modes">
+            {resourceEntries.map((entry, index) => (
+              <button
+                key={entry.key}
+                className={`dp2-resource-mode is-${entry.tone} ${entry.key === activeEntry?.key ? 'is-active' : ''}`}
+                type="button"
+                style={{ animationDelay: `${index * 70}ms` }}
+                aria-pressed={entry.key === activeEntry?.key}
+                onClick={() => setActiveKey(entry.key)}
+              >
+                <span>{entry.title}</span>
+                <small>{entry.desc}</small>
+              </button>
+            ))}
+          </div>
+
+          <div className="dp2-resource-output">
+            <span>{streaming ? 'GENERATING' : 'PREVIEW'}</span>
+            <h3>{activeEntry?.title || '章节资源'}</h3>
+            {streamErr ? (
+              <p>{streamErr}</p>
+            ) : streamText ? (
+              <div className="dp2-resource-markdown">
+                <ReactMarkdown
+                  remarkPlugins={markdownRemarkPlugins}
+                  rehypePlugins={markdownRehypePlugins}
+                  components={{
+                    code({ inline, className, children }) {
+                      const match = /language-(\w+)/.exec(className || '');
+                      return !inline && match ? (
+                        <CodeBlock language={match[1]} value={String(children).replace(/\n$/, '')} />
+                      ) : (
+                        <code>{children}</code>
+                      );
+                    },
+                  }}
+                >
+                  {normalizeMathText(streamDisplay)}
+                </ReactMarkdown>
+              </div>
+            ) : (
+              <>
+                <p>{canGenerate ? '选择一种资源形态，生成当前小节的复习材料。' : '当前还没有选中小节，返回学习页选择目录后即可生成。'}</p>
+                <div className="dp2-resource-lines" aria-hidden>
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                </div>
+              </>
+            )}
+            <div className="dp2-actions">
+              <V29Button onClick={() => void startResource()} disabled={streaming || !canGenerate}>
+                {streaming ? '生成中' : '生成'}
+              </V29Button>
+              <V29Button quiet onClick={() => setStreamText('')} disabled={streaming || !streamText}>清空预览</V29Button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </V29PageShell>
+  );
+}
 
 const LoginView = ({ onLoginSuccess }) => {
   const [authStep, setAuthStep] = useState('login');
@@ -547,8 +864,241 @@ const LoginView = ({ onLoginSuccess }) => {
     if (e.key === 'Enter') handleAuthSubmit();
   };
 
+  const authVisual = {
+    login: {
+      eyebrow: 'RETURN',
+      title: '继续学习',
+      body: '恢复课程、画像和对话。',
+      heading: '账号入口',
+      notes: ['课程恢复', '画像同步', '会话延续'],
+      primary: '登录',
+      secondary: '找回密码',
+    },
+    register: {
+      eyebrow: 'CREATE',
+      title: '建立学习身份',
+      body: '邮箱必填，昵称唯一。',
+      heading: '创建账号',
+      notes: ['邮箱绑定', '昵称校验', '密码防护'],
+      primary: '注册',
+      secondary: '返回登录',
+    },
+    forgot: {
+      eyebrow: 'RECOVER',
+      title: '邮箱找回',
+      body: '用注册邮箱接收重置令牌。',
+      heading: '找回密码',
+      notes: ['只发令牌', '邮箱匹配', '过期保护'],
+      primary: tokenReady ? '继续重置' : '发送令牌',
+      secondary: '返回登录',
+    },
+    'forgot-reset': {
+      eyebrow: 'RESET',
+      title: '重置账号',
+      body: '输入令牌，设置新昵称和新密码。',
+      heading: '重置密码',
+      notes: ['令牌验证', '昵称查重', '密码更新'],
+      primary: '确认重置',
+      secondary: '返回找回',
+    },
+  }[authStep] || {};
+
+  const goLogin = () => {
+    setAuthStep('login');
+    setPassword('');
+    setConfirmPassword('');
+    setErrorMsg('');
+    setSuccessMsg('');
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+    setTokenReady(false);
+    setResetToken('');
+    setResetHint('');
+    setForgotEmail('');
+    setRegEmail('');
+  };
+
   return (
-    <div className="mentor-auth-page pa-page relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
+    <V29PageShell variant="auth">
+      <div className="dp2-auth">
+        <aside className="dp2-auth-story">
+          <div className="dp2-mini-label">{authVisual.eyebrow}</div>
+          <h2>{authVisual.title}</h2>
+          <p>{authVisual.body}</p>
+          <div className="dp2-short-rule" />
+          <div className="dp2-auth-constellation" aria-hidden>
+            {(authVisual.notes || []).map((note, index) => (
+              <span key={note} style={{ '--i': index }}>{note}</span>
+            ))}
+          </div>
+        </aside>
+
+        <section className="dp2-auth-form">
+          <div className="dp2-form-heading">
+            <span>ACCOUNT</span>
+            <h3>{authVisual.heading}</h3>
+          </div>
+
+          <div className="dp2-form-lines">
+            {authStep === 'forgot' ? (
+              <V29Field label="邮箱" delay={0}>
+                <input
+                  type="email"
+                  autoComplete="email"
+                  maxLength={255}
+                  placeholder="注册邮箱"
+                  value={forgotEmail}
+                  onChange={(e) => {
+                    setForgotEmail(e.target.value);
+                    if (errorMsg) setErrorMsg('');
+                    if (successMsg) setSuccessMsg('');
+                  }}
+                  onKeyDown={handleKeyDown}
+                />
+              </V29Field>
+            ) : (
+              <V29Field label={authStep === 'forgot-reset' ? '新昵称' : '昵称'} delay={0}>
+                <input
+                  type="text"
+                  autoComplete="username"
+                  maxLength={16}
+                  placeholder={authStep === 'forgot-reset' ? '设置新昵称' : '输入昵称'}
+                  value={username}
+                  onChange={(e) => {
+                    setUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''));
+                    if (errorMsg) setErrorMsg('');
+                    if (successMsg) setSuccessMsg('');
+                  }}
+                  onKeyDown={handleKeyDown}
+                />
+              </V29Field>
+            )}
+
+            {authStep === 'register' && (
+              <V29Field label="邮箱" delay={70}>
+                <input
+                  type="email"
+                  autoComplete="email"
+                  required
+                  maxLength={255}
+                  placeholder="注册邮箱"
+                  value={regEmail}
+                  onChange={(e) => {
+                    setRegEmail(e.target.value);
+                    if (errorMsg) setErrorMsg('');
+                    if (successMsg) setSuccessMsg('');
+                  }}
+                  onKeyDown={handleKeyDown}
+                />
+              </V29Field>
+            )}
+
+            {authStep === 'forgot-reset' && (
+              <V29Field label="令牌" delay={70}>
+                <input
+                  type="text"
+                  maxLength={128}
+                  placeholder="邮件令牌"
+                  value={resetToken}
+                  onChange={(e) => {
+                    setResetToken(e.target.value.replace(/\s/g, ''));
+                    if (errorMsg) setErrorMsg('');
+                  }}
+                  onKeyDown={handleKeyDown}
+                />
+              </V29Field>
+            )}
+
+            {(authStep === 'login' || authStep === 'register' || authStep === 'forgot-reset') && (
+              <V29Field label={authStep === 'forgot-reset' ? '新密码' : '密码'} delay={authStep === 'login' ? 70 : 140}>
+                <input
+                  ref={passwordRef}
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete={authStep === 'login' ? 'current-password' : 'new-password'}
+                  maxLength={authStep === 'login' ? 128 : 20}
+                  placeholder={authStep === 'login' ? '输入密码' : '安全密码'}
+                  value={password}
+                  onChange={(e) => {
+                    const val = authStep === 'login' ? e.target.value : e.target.value.replace(/[^A-Za-z0-9]/g, '');
+                    setPassword(val);
+                    if (errorMsg) setErrorMsg('');
+                    if (successMsg) setSuccessMsg('');
+                  }}
+                  onKeyDown={handleKeyDown}
+                />
+              </V29Field>
+            )}
+
+            {authStep === 'forgot-reset' && (
+              <V29Field label="确认密码" delay={210}>
+                <input
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  maxLength={20}
+                  placeholder="再次输入新密码"
+                  value={confirmPassword}
+                  onChange={(e) => {
+                    setConfirmPassword(e.target.value.replace(/[^A-Za-z0-9]/g, ''));
+                    if (errorMsg) setErrorMsg('');
+                  }}
+                  onKeyDown={handleKeyDown}
+                />
+              </V29Field>
+            )}
+
+            {tokenReady && authStep === 'forgot' && (
+              <p className="text-[0.78rem] leading-6 text-[#33403f]/60">
+                {resetHint || '请到注册邮箱查收令牌，然后继续设置新昵称和新密码。'}
+              </p>
+            )}
+            {successMsg && <p className="text-[0.78rem] leading-6 text-emerald-700">{successMsg}</p>}
+            {errorMsg && <p className="text-[0.78rem] leading-6 text-red-700">{errorMsg}</p>}
+          </div>
+
+          <div className="dp2-actions">
+            <V29Button onClick={handleAuthSubmit}>
+              {loading ? '处理中' : authVisual.primary}
+            </V29Button>
+            {authStep === 'login' && (
+              <V29Button quiet onClick={() => {
+                setAuthStep('forgot');
+                setPassword('');
+                setConfirmPassword('');
+                setErrorMsg('');
+                setSuccessMsg('');
+                setTokenReady(false);
+                setResetToken('');
+                setResetHint('');
+                setRegEmail('');
+                setForgotEmail('');
+                setUsername('');
+              }}>
+                {authVisual.secondary}
+              </V29Button>
+            )}
+            {authStep === 'register' && <V29Button quiet onClick={goLogin}>{authVisual.secondary}</V29Button>}
+            {authStep === 'forgot' && (
+              <V29Button quiet onClick={() => {
+                if (tokenReady) {
+                  setAuthStep('forgot-reset');
+                  setErrorMsg('');
+                  return;
+                }
+                goLogin();
+              }}>
+                {tokenReady ? '继续重置' : authVisual.secondary}
+              </V29Button>
+            )}
+            {authStep === 'forgot-reset' && <V29Button quiet onClick={() => setAuthStep('forgot')}>{authVisual.secondary}</V29Button>}
+            {authStep === 'login' && <V29Button quiet onClick={() => setAuthStep('register')}>创建账号</V29Button>}
+          </div>
+        </section>
+      </div>
+    </V29PageShell>
+  );
+
+  return (
+    <div className="pa-page dp2-live-auth relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
       <div
         className="pa-orb pa-orb-1 -right-[12%] top-[-18%] h-[min(52vw,520px)] w-[min(52vw,520px)] bg-[radial-gradient(circle_at_center,rgba(184,149,92,0.35),transparent_68%)]"
         aria-hidden
@@ -599,7 +1149,7 @@ const LoginView = ({ onLoginSuccess }) => {
 
         <section className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-4 py-6 md:px-8">
           <div className={`scrollbar-hide relative max-h-full w-full max-w-[440px] overflow-y-auto ${shake ? 'animate-[shake_0.45s_ease-in-out]' : ''}`}>
-            <div className="mentor-auth-panel group relative overflow-hidden border border-[#1a1f24]/[0.07] bg-white/90 shadow-[0_28px_90px_rgba(26,31,36,0.08)] backdrop-blur-xl">
+            <div className="group relative overflow-hidden border border-[#1a1f24]/[0.07] bg-white/90 shadow-[0_28px_90px_rgba(26,31,36,0.08)] backdrop-blur-xl">
               <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#b8955c]/50 to-transparent" />
               {/* PA 式四角装饰线 */}
               <div className="pa-corners" aria-hidden>
@@ -870,7 +1420,7 @@ const LoginView = ({ onLoginSuccess }) => {
                   <button
                     onClick={handleAuthSubmit}
                     disabled={loading}
-                    className="mentor-primary-action pa-motion-ui group relative w-full overflow-hidden border border-[#1a1f24]/[0.12] bg-[#1a1f24] py-4 text-[12px] font-semibold tracking-[0.32em] text-[#faf9f7] transition-all duration-500 hover:-translate-y-0.5 hover:shadow-[0_20px_48px_rgba(26,31,36,0.18)] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                    className="pa-motion-ui group relative w-full overflow-hidden border border-[#1a1f24]/[0.12] bg-[#1a1f24] py-4 text-[12px] font-semibold tracking-[0.32em] text-[#faf9f7] transition-all duration-500 hover:-translate-y-0.5 hover:shadow-[0_20px_48px_rgba(26,31,36,0.18)] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0 disabled:hover:shadow-none"
                   >
                     <span className="absolute inset-0 translate-y-full bg-[#b8955c] transition-transform duration-500 group-hover:translate-y-0" />
                     <span className="relative z-10 flex items-center justify-center gap-3">
@@ -1008,7 +1558,7 @@ const SubjectGrid = ({ onSelectSubject, onLogout, username, apiBase }) => {
   ];
 
   return (
-    <div className="mentor-subject-page pa-page relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
+    <div className="pa-page dp2-live-board relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
       <div className="pointer-events-none absolute inset-0 z-0">
         <ParticleField className="opacity-[0.26] mix-blend-multiply sm:opacity-[0.34]" areaScale={1.08} />
       </div>
@@ -1060,8 +1610,8 @@ const SubjectGrid = ({ onSelectSubject, onLogout, username, apiBase }) => {
       <main className="relative z-10 min-h-0 flex-1 overflow-hidden">
         <div className="pa-dashboard-bg-grid opacity-80" aria-hidden />
         <div className="pa-dashboard-edge-sheen hidden opacity-90 md:block" aria-hidden />
-        <div className="scrollbar-hide relative z-10 h-full min-h-0 overflow-hidden">
-          <div className="mx-auto flex h-full min-h-0 max-w-5xl flex-col px-5 pb-8 pt-8 md:px-10 md:pb-10 md:pt-10 lg:px-12">
+        <div className="scrollbar-hide relative z-10 h-full min-h-0 overflow-y-auto">
+          <div className="mx-auto max-w-5xl px-5 pb-24 pt-10 md:px-10 md:pt-14 lg:px-12">
             <p className="pa-label text-[10px] font-medium tracking-[0.34em] text-[#1a1f24]/38 uppercase">Curriculum</p>
             <h1 className="mt-3 font-display text-[clamp(1.65rem,4.2vw,2.65rem)] font-medium leading-[1.12] tracking-tight text-[#1a1f24] pa-motion-display">
               选择课程
@@ -1071,14 +1621,14 @@ const SubjectGrid = ({ onSelectSubject, onLogout, username, apiBase }) => {
               以下五个模块为对话式学习入口，点按卡片即可开始。
             </p>
 
-            <ul className="mentor-subject-list mt-8 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:mt-9 md:space-y-5">
+            <ul className="mt-12 space-y-4 sm:mt-14 md:space-y-5">
               {subjects.map((s, idx) => (
                 <Reveal key={s.id} snappy delay={idx * 18}>
                   <li>
                     <button
                       type="button"
                       onClick={() => onSelectSubject(s.name)}
-                      className="mentor-subject-card group relative w-full overflow-hidden rounded-sm border border-[#1a1f24]/[0.08] bg-white/80 text-left shadow-[0_6px_22px_rgba(26,31,36,0.04)] backdrop-blur-sm transition-all duration-500 ease-out hover:-translate-y-0.5 hover:border-[#b8955c]/32 hover:shadow-[0_18px_46px_rgba(26,31,36,0.1)]"
+                      className="group relative w-full overflow-hidden rounded-sm border border-[#1a1f24]/[0.08] bg-white/80 text-left shadow-[0_6px_22px_rgba(26,31,36,0.04)] backdrop-blur-sm transition-all duration-500 ease-out hover:-translate-y-0.5 hover:border-[#b8955c]/32 hover:shadow-[0_18px_46px_rgba(26,31,36,0.1)]"
                     >
                       <div className="pa-hline-runner absolute inset-x-0 top-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100" aria-hidden />
                       <svg className="pa-frame-svg" preserveAspectRatio="none" viewBox="0 0 100 100" aria-hidden>
@@ -1126,6 +1676,159 @@ const SubjectGrid = ({ onSelectSubject, onLogout, username, apiBase }) => {
   );
 };
 
+const SubjectGridV29 = ({ onSelectSubject, onLogout, username, apiBase }) => {
+  const [overviewOpen, setOverviewOpen] = useState(false);
+  const subjects = [
+    {
+      id: 'math',
+      name: '高等数学',
+      topic: '极限 / 导数 / 积分',
+      lead: 'FOUNDATION',
+      desc: '用对话把抽象公式拆成可验证的推理路径。',
+      state: 'active',
+      status: '学习中',
+      progress: 68,
+    },
+    {
+      id: 'cs',
+      name: '计算机架构',
+      topic: '指令 / 存储 / 流水线',
+      lead: 'SYSTEM',
+      desc: '从结构关系进入性能、缓存和执行过程。',
+      state: 'ready',
+      status: '可进入',
+      progress: 44,
+    },
+    {
+      id: 'nlp',
+      name: '自然语言处理',
+      topic: '语义 / 表征 / 生成',
+      lead: 'LANGUAGE',
+      desc: '围绕文本理解、向量表示和模型输出构建知识网。',
+      state: 'ready',
+      status: '可进入',
+      progress: 36,
+    },
+    {
+      id: 'os',
+      name: '操作系统',
+      topic: '进程 / 内存 / 调度',
+      lead: 'KERNEL',
+      desc: '把并发、资源管理和系统调用串成章节路线。',
+      state: 'idle',
+      status: '待开启',
+      progress: 22,
+    },
+    {
+      id: 'dl',
+      name: '深度学习',
+      topic: '网络 / 训练 / 优化',
+      lead: 'MODEL',
+      desc: '从损失、梯度和泛化进入模型训练实战。',
+      state: 'idle',
+      status: '待开启',
+      progress: 18,
+    },
+  ];
+
+  return (
+    <div className="pa-page dp2-live-board dp2-live-board-layout relative overflow-hidden bg-transparent text-[#1a1f24]">
+      <div className="dp2-board">
+        <section className="dp2-section-title">
+          <div className="dp2-mini-label">COURSES</div>
+          <h2>课程看板</h2>
+          <p>选择一条学习主线，进入对话式章节学习。课程状态会跟随你的学习记录逐步更新。</p>
+          <div className="dp2-board-actions">
+            <button type="button" onClick={() => setOverviewOpen(true)}>
+              多智能体说明
+            </button>
+            <button type="button" onClick={onLogout}>
+              退出
+            </button>
+            <span>{username}</span>
+          </div>
+        </section>
+        <section className="dp2-subject-list" aria-label="课程选择">
+          {subjects.map((s, index) => (
+            <button
+              key={s.id}
+              className={`dp2-subject is-${s.state}`}
+              type="button"
+              onClick={() => onSelectSubject(s.name)}
+              style={{ '--p': `${s.progress}%`, animationDelay: `${index * 55}ms` }}
+            >
+              <span className="dp2-course-no">{String(index + 1).padStart(2, '0')}</span>
+              <span className="dp2-course-body">
+                <span className="dp2-course-main">
+                  <span className="dp2-course-kicker">{s.lead}</span>
+                  <strong>{s.name}</strong>
+                </span>
+                <span className="dp2-course-subline">
+                  <span className="dp2-course-topic">{s.topic}</span>
+                  <span>{s.status}</span>
+                  <small>{s.desc}</small>
+                </span>
+              </span>
+              <span className="dp2-course-mark" aria-hidden>
+                <span />
+                <b />
+              </span>
+              <i className="dp2-course-line" aria-label={`${s.name} 进度`}>
+                <b />
+              </i>
+            </button>
+          ))}
+        </section>
+      </div>
+
+      <StudioMentorOverviewModal open={overviewOpen} onClose={() => setOverviewOpen(false)} apiBase={apiBase} />
+    </div>
+  );
+};
+
+const SubjectGridExactV29 = ({ onSelectSubject }) => (
+  <V29PageShell variant="board">
+    <div className="dp2-board">
+      <section className="dp2-section-title">
+        <div className="dp2-mini-label">COURSES</div>
+        <h2>课程看板</h2>
+        <p>像浏览项目一样选择课程，先看状态，再进入章节。</p>
+      </section>
+      <section className="dp2-subject-list" aria-label="课程选择">
+        {v29Subjects.map(([title, topic, state, progress], index) => (
+          <button
+            key={title}
+            className={`dp2-subject is-${state}`}
+            type="button"
+            onClick={() => onSelectSubject(title)}
+            style={{ '--p': `${progress}%`, animationDelay: `${index * 55}ms` }}
+          >
+            <span className="dp2-course-no">{String(index + 1).padStart(2, '0')}</span>
+            <span className="dp2-course-body">
+              <span className="dp2-course-main">
+                <span className="dp2-course-kicker">{v29CourseShowcase[index][0]}</span>
+                <strong>{title}</strong>
+              </span>
+              <span className="dp2-course-subline">
+                <span className="dp2-course-topic">{topic} / {v29CourseShowcase[index][1]}</span>
+                <span>{state === 'active' ? '学习中' : state === 'ready' ? '可进入' : '待开启'}</span>
+                <small>{v29CourseShowcase[index][2]}</small>
+              </span>
+            </span>
+            <span className="dp2-course-mark" aria-hidden>
+              <span />
+              <b />
+            </span>
+            <i className="dp2-course-line" aria-label={`${title} 进度`}>
+              <b />
+            </i>
+          </button>
+        ))}
+      </section>
+    </div>
+  </V29PageShell>
+);
+
 // --- 3. 对话界面：会话列表 + 章节目录（大章 / 小节，数据来自后端 /learning-catalog）---
 const ChatView = ({ subject, username, onBack }) => {
   const welcomeMessage = { role: 'assistant', content: `你好 **${username}**！欢迎来到 **${subject}** 导师课堂。` };
@@ -1150,6 +1853,7 @@ const ChatView = ({ subject, username, onBack }) => {
   const [deletingSessionId, setDeletingSessionId] = useState(null);
 
   const [chapterRightTab, setChapterRightTab] = useState('catalog');
+  const [studioPanel, setStudioPanel] = useState('study');
   const [visitedSections, setVisitedSections] = useState([]);
   const [progress, setProgress] = useState({ sections: {}, chapters: {}, sectionRule: null });
   const [learnMode, setLearnMode] = useState(false);
@@ -1336,6 +2040,7 @@ const ChatView = ({ subject, username, onBack }) => {
     setQuizModal(null);
     setProgress({ sections: {}, chapters: {}, sectionRule: null });
     setChapterRightTab('catalog');
+    setStudioPanel('study');
     preferUiOverHistoryUntilRef.current = null;
 
     loadSessions();
@@ -2119,11 +2824,268 @@ const ChatView = ({ subject, username, onBack }) => {
 
   const quizResult = quizModal?.result || null;
 
+  const v29PathRows =
+    catalog.length > 0
+      ? catalog.flatMap((chapter) =>
+          (chapter.sections || []).map((section) => ({
+            key: `${chapter.id}|${section.id}`,
+            title: section.title,
+            chapter,
+            section,
+          }))
+        )
+      : v29PathItems.map((item, index) => ({ key: item, title: item, fallbackIndex: index }));
+
+  if (studioPanel === 'resources') {
+    return (
+      <V29ResourceWorkspace
+        apiBase={API_BASE}
+        username={username}
+        subject={subject}
+        chapterId={selectedChapterId}
+        sectionId={selectedSectionId}
+        scopeLabel={scopeLabel}
+        onBack={() => setStudioPanel('study')}
+      />
+    );
+  }
+
   return (
-    <div className="mentor-studio-page pa-page relative flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
-      <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-        <ParticleField className="opacity-[0.16] mix-blend-multiply" areaScale={1.18} />
+    <V29PageShell variant="studio">
+      <div className="dp2-studio">
+        <aside className="dp2-portrait">
+          <div className="dp2-mini-label">PROFILE</div>
+          <h2>学习画像</h2>
+          <p>画像随对话与练习实时漂移。</p>
+          <V29LearningMap />
+        </aside>
+
+        <main className="dp2-chat">
+          <div className="dp2-chat-top">
+            <span>{subject || 'MENTOR'}</span>
+            <V29Button quiet onClick={() => void prepareSmallQuiz()} disabled={isLoading || !canPrepareSmallQuiz}>
+              章节小测
+            </V29Button>
+            <V29Button quiet onClick={() => setStudioPanel('resources')}>
+              资源生成
+            </V29Button>
+          </div>
+
+          <div className="dp2-dialogue">
+            {messages.slice(-5).map((m, i) => {
+              const isUser = m.role === 'user';
+              const assistantTyping =
+                m.role === 'assistant' &&
+                isLoading &&
+                i === messages.slice(-5).length - 1 &&
+                !(typeof m.content === 'string' && m.content.trim());
+
+              return (
+                <article key={`${m.role}-${i}`} className={`dp2-bubble ${isUser ? 'is-user' : ''}`}>
+                  <span>{isUser ? '我' : '导师'}</span>
+                  {isUser ? (
+                    <UserMessageBody content={m.content} />
+                  ) : assistantTyping ? (
+                    <div>正在输入中...</div>
+                  ) : (
+                    <ReactMarkdown
+                      remarkPlugins={markdownRemarkPlugins}
+                      rehypePlugins={markdownRehypePlugins}
+                      components={{
+                        code({ inline, className, children }) {
+                          const match = /language-(\w+)/.exec(className || '');
+                          return !inline && match ? (
+                            <CodeBlock language={match[1]} value={String(children).replace(/\n$/, '')} />
+                          ) : (
+                            <code>{children}</code>
+                          );
+                        },
+                      }}
+                    >
+                      {normalizeMathText(m.content)}
+                    </ReactMarkdown>
+                  )}
+                </article>
+              );
+            })}
+            <div ref={messagesEndRef} />
+          </div>
+
+          <div className="dp2-compose">
+            <input
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSend();
+              }}
+              placeholder={learnMode ? `回答当前小节：${scopeLabel || ''}` : '输入你的问题'}
+              aria-label="输入你的问题"
+            />
+            <V29Button onClick={() => handleSend()} disabled={isLoading}>发送</V29Button>
+          </div>
+        </main>
+
+        <aside className="dp2-study-rail">
+          <section className="dp2-plan">
+            <div className="dp2-mini-label">PLAN</div>
+            <h3>当前阶段</h3>
+            <p>{scopeLabel ? `正在学习：${scopeLabel}` : '先选择小节，再进入带学或小测。'}</p>
+            <ol>
+              <li>观察当前知识节点</li>
+              <li>完成对话带学</li>
+              <li>进入章节小测</li>
+            </ol>
+            <V29Button quiet onClick={onBack}>返回看板</V29Button>
+          </section>
+
+          <section className="dp2-path">
+            <div className="dp2-mini-label">目录</div>
+            {catalogLoading && <div className="dp2-path-item"><span /><strong>加载目录</strong><small>同步中</small></div>}
+            {!catalogLoading && catalogErr && <div className="dp2-path-item"><span /><strong>目录加载失败</strong><small>{catalogErr}</small></div>}
+            {!catalogLoading &&
+              !catalogErr &&
+              v29PathRows.map((item, index) => {
+                const active = item.chapter?.id === selectedChapterId && item.section?.id === selectedSectionId;
+                const status =
+                  item.fallbackIndex != null
+                    ? item.fallbackIndex < 2
+                      ? '已完成'
+                      : item.fallbackIndex === 2
+                        ? '进行中'
+                        : '待开启'
+                    : progress.sections?.[item.key]?.small_quiz_passed
+                      ? '已完成'
+                      : active
+                        ? '进行中'
+                        : '待开启';
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`dp2-path-item ${active ? 'is-active' : ''}`}
+                    style={{ animationDelay: `${index * 80}ms` }}
+                    onClick={() => {
+                      if (!item.chapter || !item.section) return;
+                      setLearnMode(false);
+                      setSelectedChapterId(item.chapter.id);
+                      setSelectedSectionId(item.section.id);
+                      setExpandedChapters((prev) => ({ ...prev, [item.chapter.id]: true }));
+                      const matched = sessions.filter((s) => s.chapter === item.key);
+                      setCurrentSessionId(matched[0]?.id ?? null);
+                    }}
+                  >
+                    <span />
+                    <strong>{item.title}</strong>
+                    <small>{status}</small>
+                  </button>
+                );
+              })}
+          </section>
+        </aside>
       </div>
+
+      {quizModal && quizModal.questions?.length > 0 && (
+        <div className="dp2-functional-modal" role="dialog" aria-modal="true">
+          {!quizResult ? (
+            <div className="dp2-quiz">
+              <section className="dp2-section-title">
+                <div className="dp2-mini-label">TEST</div>
+                <h2>{quizModal.type === 'small' ? '章节小测' : '章节测试'}</h2>
+                <p>完成后留在当前窗口查看结果、答案和解析。</p>
+              </section>
+              <section className="dp2-quiz-board">
+                <article className="dp2-quiz-focus">
+                  <span>当前题目</span>
+                  <h3>{quizModal.questions[0]?.question}</h3>
+                  <div className="dp2-options">
+                    {(quizModal.questions[0]?.options || []).map((option, index) => (
+                      <button
+                        key={option}
+                        type="button"
+                        className={quizPicks[0] === index ? 'is-selected' : ''}
+                        onClick={() =>
+                          setQuizPicks((prev) => {
+                            const next = [...prev];
+                            next[0] = index;
+                            return next;
+                          })
+                        }
+                      >
+                        <span>{String.fromCharCode(65 + index)}</span>
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                  <footer className="dp2-quiz-actions">
+                    <V29Button quiet onClick={() => setQuizModal(null)}>稍后</V29Button>
+                    <V29Button
+                      disabled={isLoading || quizPicks.some((p) => p < 0)}
+                      onClick={() => {
+                        if (quizModal.type === 'small') submitSmallQuiz(quizPicks);
+                        else submitChapterQuiz(quizModal.chapterId, quizPicks);
+                      }}
+                    >
+                      提交答案
+                    </V29Button>
+                  </footer>
+                </article>
+                <div className="dp2-quiz-strip">
+                  {quizModal.questions.map((q, index) => (
+                    <button key={index} type="button" className={quizPicks[index] >= 0 ? 'is-done' : index === 0 ? 'is-now' : ''}>
+                      <i />
+                      <span>{q.question}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </div>
+          ) : (
+            <div className="dp2-result">
+              <section className="dp2-result-hero">
+                <div className="dp2-mini-label">REVIEW</div>
+                <h2>结果解析</h2>
+                <p>{quizResult.passed ? '已通过本次测验。' : '未达标时自动衔接 AI 巩固学习。'}</p>
+                <div className="dp2-result-orbit" aria-hidden>
+                  <span>{quizResult.passed ? '已掌握' : '需巩固'}</span>
+                </div>
+              </section>
+              <section className="dp2-result-board">
+                <div className="dp2-result-track" aria-hidden>
+                  <i className="is-ok" />
+                  <i className="is-warn" />
+                  <i className="is-miss" />
+                </div>
+                <div className="dp2-result-list">
+                  {(quizResult.items || []).slice(0, 3).map((item, index) => (
+                    <article key={index} className={`dp2-result-card ${item.is_correct ? 'is-ok' : 'is-miss'}`}>
+                      <span>{item.is_correct ? '掌握' : '回补'}</span>
+                      <p>{item.explanation || item.question}</p>
+                    </article>
+                  ))}
+                </div>
+                <aside className="dp2-ai-queue">
+                  <span>NEXT</span>
+                  <h3>AI 巩固路径</h3>
+                  <ol>
+                    <li>回看薄弱知识点</li>
+                    <li>补做变式题</li>
+                    <li>重新生成章节小测</li>
+                  </ol>
+                  <div className="dp2-actions">
+                    <V29Button onClick={() => setQuizModal(null)}>继续学习</V29Button>
+                  </div>
+                </aside>
+              </section>
+            </div>
+          )}
+        </div>
+      )}
+    </V29PageShell>
+  );
+
+  return (
+    <div className="pa-page dp2-live-studio flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-[#f6f4ef] text-[#1a1f24] pa-grain">
       <aside className="relative flex h-full min-h-0 w-72 flex-shrink-0 flex-col border-r border-[#1a1f24]/[0.08] bg-[#ebe8e0] sm:w-80">
         <div
           className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(184,149,92,0.14),transparent_52%)]"
@@ -2287,10 +3249,10 @@ const ChatView = ({ subject, username, onBack }) => {
               return (
                 <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                   <div
-                    className={`mentor-chat-bubble chat-prose max-w-[92%] border px-6 py-5 shadow-[0_16px_44px_rgba(26,31,36,0.05)] transition-all duration-700 ease-out ${
+                    className={`chat-prose max-w-[92%] border px-6 py-5 shadow-[0_16px_44px_rgba(26,31,36,0.05)] transition-all duration-700 ease-out ${
                       m.role === 'user'
-                        ? 'mentor-chat-bubble-user rounded-2xl rounded-br-sm border-[#1a1f24]/[0.1] bg-[#1a1f24] text-[#faf9f7]'
-                        : 'mentor-chat-bubble-assistant rounded-2xl rounded-tl-sm border-[#1a1f24]/[0.06] bg-white text-[#1a1f24]'
+                        ? 'rounded-2xl rounded-br-sm border-[#1a1f24]/[0.1] bg-[#1a1f24] text-[#faf9f7]'
+                        : 'rounded-2xl rounded-tl-sm border-[#1a1f24]/[0.06] bg-white text-[#1a1f24]'
                     }`}
                   >
                     {m.role === 'user' ? (
@@ -2657,7 +3619,7 @@ const ChatView = ({ subject, username, onBack }) => {
 
       {quizModal && quizModal.questions?.length > 0 && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4" role="dialog" aria-modal="true">
-          <div className="mentor-quiz-modal max-h-[min(90vh,720px)] w-full max-w-2xl overflow-y-auto rounded-xl border border-[#1a1f24]/10 bg-[#faf9f7] p-6 shadow-2xl">
+          <div className="max-h-[min(90vh,720px)] w-full max-w-2xl overflow-y-auto rounded-xl border border-[#1a1f24]/10 bg-[#faf9f7] p-6 shadow-2xl">
             <h3 className="font-display text-lg text-[#1a1f24]">
               {quizResult ? '测验结果与解析' : quizModal.type === 'small' ? '小节学习总结测验' : '大章学习总结测验'}
             </h3>
@@ -2777,11 +3739,77 @@ export default function App() {
   const [appStep, setAppStep] = useState(localStorage.getItem('currentUser') ? 'subjects' : 'login');
   const [selectedSubject, setSelectedSubject] = useState(null);
   const [introDone, setIntroDone] = useState(false);
+  const liveRootRef = useRef(null);
+  const isDesignPreview =
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'design';
+
+  const handleLivePointerMove = (event) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - bounds.left) / bounds.width) * 100;
+    const y = ((event.clientY - bounds.top) / bounds.height) * 100;
+
+    if (!liveRootRef.current) return;
+    liveRootRef.current.style.setProperty('--cursor-x', `${event.clientX}px`);
+    liveRootRef.current.style.setProperty('--cursor-y', `${event.clientY}px`);
+    liveRootRef.current.style.setProperty('--mx', `${x}%`);
+    liveRootRef.current.style.setProperty('--my', `${y}%`);
+  };
+
+  if (isDesignPreview) {
+    return <DesignPreview />;
+  }
 
   return (
-    <>
+    <div
+      ref={liveRootRef}
+      className="dp2-root"
+      onPointerMove={handleLivePointerMove}
+    >
+      <CursorTrace />
       {!introDone && <IntroLoader onComplete={() => setIntroDone(true)} />}
-      <div className="mentor-shell pa-page h-dvh max-h-dvh overflow-hidden bg-[#f6f4ef] text-[#1a1f24] antialiased" data-app-step={appStep}>
+      <header className="dp2-header">
+        <button
+          type="button"
+          className="dp2-brand"
+          onClick={() => {
+            if (currentUser) setAppStep('subjects');
+          }}
+        >
+          <strong>Mentor</strong>
+          <span>{currentUser ? currentUser : 'Learning Field'}</span>
+        </button>
+        <nav aria-label="Mentor main navigation">
+          <button
+            type="button"
+            className={appStep === 'login' ? 'is-active' : ''}
+            onClick={() => {
+              localStorage.removeItem('currentUser');
+              setCurrentUser('');
+              setSelectedSubject(null);
+              setAppStep('login');
+            }}
+          >
+            登录
+          </button>
+          <button
+            type="button"
+            className={appStep === 'subjects' ? 'is-active' : ''}
+            disabled={!currentUser}
+            onClick={() => currentUser && setAppStep('subjects')}
+          >
+            课程
+          </button>
+          <button
+            type="button"
+            className={appStep === 'chat' ? 'is-active' : ''}
+            disabled={!currentUser || !selectedSubject}
+            onClick={() => currentUser && selectedSubject && setAppStep('chat')}
+          >
+            学习
+          </button>
+        </nav>
+      </header>
+      <main className="dp2-main" key={appStep}>
       {appStep === 'login' && (
         <LoginView
           onLoginSuccess={(name) => {
@@ -2793,7 +3821,7 @@ export default function App() {
       )}
 
       {appStep === 'subjects' && (
-        <SubjectGrid
+        <SubjectGridExactV29
           apiBase={API_BASE}
           username={currentUser}
           onSelectSubject={(n) => {
@@ -2816,7 +3844,7 @@ export default function App() {
           onBack={() => setAppStep('subjects')}
         />
       )}
+    </main>
     </div>
-    </>
   );
 }
