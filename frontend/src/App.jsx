@@ -1867,6 +1867,7 @@ const ChatView = ({ subject, username, onBack }) => {
   const rawRef = useRef('');
   const rafRef = useRef(null);
   const readerRef = useRef(null);
+  const quizStripRef = useRef(null);
   /** 刚流式输出完的会话 id：在此 id 的历史尚未可查时不要用「空历史 → 欢迎页」覆盖界面 */
   const preferUiOverHistoryUntilRef = useRef(null);
 
@@ -2201,12 +2202,15 @@ const ChatView = ({ subject, username, onBack }) => {
   }, [currentSessionId, catalog, learnMode, isLoading]);
 
   const [quizPicks, setQuizPicks] = useState([]);
+  const [quizIndex, setQuizIndex] = useState(0);
 
   useEffect(() => {
     if (quizModal?.questions?.length) {
       setQuizPicks(quizModal.questions.map(() => -1));
+      setQuizIndex(0);
     } else {
       setQuizPicks([]);
+      setQuizIndex(0);
     }
   }, [quizModal]);
 
@@ -2823,6 +2827,24 @@ const ChatView = ({ subject, username, onBack }) => {
   };
 
   const quizResult = quizModal?.result || null;
+  const quizQuestions = quizModal?.questions || [];
+  const currentQuizQuestion = quizQuestions[quizIndex] || quizQuestions[0] || null;
+  const isLastQuizQuestion = quizIndex >= quizQuestions.length - 1;
+  const allQuizAnswered = quizQuestions.length > 0 && quizPicks.length === quizQuestions.length && quizPicks.every((p) => p >= 0);
+
+  useEffect(() => {
+    if (!quizModal || quizResult || quizQuestions.length === 0) return;
+    const strip = quizStripRef.current;
+    const target = strip?.querySelector(`[data-quiz-index="${quizIndex}"]`);
+    target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [quizIndex, quizModal, quizQuestions.length, quizResult]);
+
+  const handleQuizWheel = (event) => {
+    if (quizQuestions.length <= 1) return;
+    event.stopPropagation();
+    const direction = event.deltaY > 0 ? 1 : -1;
+    setQuizIndex((index) => Math.max(0, Math.min(quizQuestions.length - 1, index + direction)));
+  };
 
   const v29PathRows =
     catalog.length > 0
@@ -2861,14 +2883,9 @@ const ChatView = ({ subject, username, onBack }) => {
         </aside>
 
         <main className="dp2-chat">
-          <div className="dp2-chat-top">
+          <div className="dp2-study-context">
             <span>{subject || 'MENTOR'}</span>
-            <V29Button quiet onClick={() => void prepareSmallQuiz()} disabled={isLoading || !canPrepareSmallQuiz}>
-              章节小测
-            </V29Button>
-            <V29Button quiet onClick={() => setStudioPanel('resources')}>
-              资源生成
-            </V29Button>
+            <strong>{scopeLabel || '选择小节后开始学习'}</strong>
           </div>
 
           <div className="dp2-dialogue">
@@ -2936,8 +2953,17 @@ const ChatView = ({ subject, username, onBack }) => {
               <li>完成对话带学</li>
               <li>进入章节小测</li>
             </ol>
-            <V29Button quiet onClick={onBack}>返回看板</V29Button>
           </section>
+
+          <div className="dp2-rail-actions">
+            <V29Button quiet onClick={() => void prepareSmallQuiz()} disabled={isLoading || !canPrepareSmallQuiz}>
+              章节小测
+            </V29Button>
+            <V29Button quiet onClick={() => setStudioPanel('resources')}>
+              资源生成
+            </V29Button>
+            <V29Button quiet onClick={onBack}>返回看板</V29Button>
+          </div>
 
           <section className="dp2-path">
             <div className="dp2-mini-label">目录</div>
@@ -2985,29 +3011,29 @@ const ChatView = ({ subject, username, onBack }) => {
         </aside>
       </div>
 
-      {quizModal && quizModal.questions?.length > 0 && (
+      {quizModal && quizQuestions.length > 0 && (
         <div className="dp2-functional-modal" role="dialog" aria-modal="true">
           {!quizResult ? (
             <div className="dp2-quiz">
               <section className="dp2-section-title">
                 <div className="dp2-mini-label">TEST</div>
                 <h2>{quizModal.type === 'small' ? '章节小测' : '章节测试'}</h2>
-                <p>完成后留在当前窗口查看结果、答案和解析。</p>
+                <p>完成后留在当前窗口查看结果、答案和解析。右侧题号可直接跳转。</p>
               </section>
               <section className="dp2-quiz-board">
                 <article className="dp2-quiz-focus">
-                  <span>当前题目</span>
-                  <h3>{quizModal.questions[0]?.question}</h3>
+                  <span>{`当前题目 ${quizIndex + 1} / ${quizQuestions.length}`}</span>
+                  <h3>{currentQuizQuestion?.question}</h3>
                   <div className="dp2-options">
-                    {(quizModal.questions[0]?.options || []).map((option, index) => (
+                    {(currentQuizQuestion?.options || []).map((option, index) => (
                       <button
                         key={option}
                         type="button"
-                        className={quizPicks[0] === index ? 'is-selected' : ''}
+                        className={quizPicks[quizIndex] === index ? 'is-selected' : ''}
                         onClick={() =>
                           setQuizPicks((prev) => {
                             const next = [...prev];
-                            next[0] = index;
+                            next[quizIndex] = index;
                             return next;
                           })
                         }
@@ -3018,25 +3044,43 @@ const ChatView = ({ subject, username, onBack }) => {
                     ))}
                   </div>
                   <footer className="dp2-quiz-actions">
-                    <V29Button quiet onClick={() => setQuizModal(null)}>稍后</V29Button>
-                    <V29Button
-                      disabled={isLoading || quizPicks.some((p) => p < 0)}
-                      onClick={() => {
-                        if (quizModal.type === 'small') submitSmallQuiz(quizPicks);
-                        else submitChapterQuiz(quizModal.chapterId, quizPicks);
-                      }}
-                    >
-                      提交答案
+                    <V29Button quiet onClick={() => setQuizIndex((n) => Math.max(0, n - 1))} disabled={quizIndex === 0}>
+                      上一题
                     </V29Button>
+                    {!isLastQuizQuestion ? (
+                      <V29Button onClick={() => setQuizIndex((n) => Math.min(quizQuestions.length - 1, n + 1))}>
+                        下一题
+                      </V29Button>
+                    ) : (
+                      <V29Button
+                        disabled={isLoading || !allQuizAnswered}
+                        onClick={() => {
+                          if (quizModal.type === 'small') submitSmallQuiz(quizPicks);
+                          else submitChapterQuiz(quizModal.chapterId, quizPicks);
+                        }}
+                      >
+                        提交答案
+                      </V29Button>
+                    )}
                   </footer>
                 </article>
-                <div className="dp2-quiz-strip">
-                  {quizModal.questions.map((q, index) => (
-                    <button key={index} type="button" className={quizPicks[index] >= 0 ? 'is-done' : index === 0 ? 'is-now' : ''}>
-                      <i />
-                      <span>{q.question}</span>
-                    </button>
-                  ))}
+                <div className="dp2-quiz-strip" ref={quizStripRef} onWheel={handleQuizWheel} aria-label="题目导航">
+                  {quizQuestions.map((q, index) => {
+                    const distance = Math.abs(index - quizIndex);
+                    return (
+                      <button
+                        key={index}
+                        type="button"
+                        data-quiz-index={index}
+                        className={`${quizPicks[index] >= 0 ? 'is-done' : ''} ${index === quizIndex ? 'is-now' : ''} ${distance === 1 ? 'is-near' : ''}`}
+                        onClick={() => setQuizIndex(index)}
+                      >
+                        <i />
+                        <b>{String(index + 1).padStart(2, '0')}</b>
+                        <span>{q.question}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </section>
             </div>
@@ -3767,7 +3811,7 @@ export default function App() {
     >
       <CursorTrace />
       {!introDone && <IntroLoader onComplete={() => setIntroDone(true)} />}
-      <header className="dp2-header">
+      <header className="dp2-header dp2-header-compact">
         <button
           type="button"
           className="dp2-brand"
@@ -3778,36 +3822,6 @@ export default function App() {
           <strong>Mentor</strong>
           <span>{currentUser ? currentUser : 'Learning Field'}</span>
         </button>
-        <nav aria-label="Mentor main navigation">
-          <button
-            type="button"
-            className={appStep === 'login' ? 'is-active' : ''}
-            onClick={() => {
-              localStorage.removeItem('currentUser');
-              setCurrentUser('');
-              setSelectedSubject(null);
-              setAppStep('login');
-            }}
-          >
-            登录
-          </button>
-          <button
-            type="button"
-            className={appStep === 'subjects' ? 'is-active' : ''}
-            disabled={!currentUser}
-            onClick={() => currentUser && setAppStep('subjects')}
-          >
-            课程
-          </button>
-          <button
-            type="button"
-            className={appStep === 'chat' ? 'is-active' : ''}
-            disabled={!currentUser || !selectedSubject}
-            onClick={() => currentUser && selectedSubject && setAppStep('chat')}
-          >
-            学习
-          </button>
-        </nav>
       </header>
       <main className="dp2-main" key={appStep}>
       {appStep === 'login' && (

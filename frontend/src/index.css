@@ -1362,7 +1362,7 @@ body {
   z-index: 90;
   display: grid;
   place-items: center;
-  padding: clamp(1rem, 3vw, 2rem);
+  padding: clamp(0.8rem, 2.2vh, 1.4rem) clamp(1rem, 2.8vw, 2rem);
   background: rgba(51, 64, 63, 0.18);
   backdrop-filter: blur(12px);
 }
@@ -1370,7 +1370,28 @@ body {
 .dp2-functional-modal > .dp2-quiz,
 .dp2-functional-modal > .dp2-result {
   width: min(86rem, 94vw);
-  max-height: min(46.5rem, calc(100dvh - 6.4rem));
+  height: min(46.5rem, calc(100dvh - clamp(1.6rem, 4.8vh, 3.2rem))) !important;
+  max-height: calc(100dvh - clamp(1.6rem, 4.8vh, 3.2rem)) !important;
+  min-height: 0 !important;
+}
+
+.dp2-stage {
+  height: 100dvh !important;
+}
+
+.dp2-stage-inner {
+  min-height: 0 !important;
+}
+
+.dp2-studio {
+  height: min(46.5rem, calc(100dvh - 6.4rem)) !important;
+  min-height: min(38rem, calc(100dvh - 6.4rem)) !important;
+}
+
+.dp2-portrait,
+.dp2-chat,
+.dp2-study-rail {
+  min-height: 0 !important;
 }
 
 .dp2-compose input {
@@ -1385,6 +1406,216 @@ body {
 
 .dp2-compose input::placeholder {
   color: rgba(51, 64, 63, 0.36);
+}
+
+.dp2-header-compact {
+  justify-content: flex-start;
+}
+
+.dp2-header-compact nav {
+  display: none;
+}
+
+.dp2-study-context {
+  width: min(35rem, 82%);
+  margin: clamp(0.6rem, 2vh, 1.5rem) auto 0;
+  display: grid;
+  grid-template-columns: minmax(5rem, 0.4fr) minmax(0, 1fr);
+  gap: clamp(1rem, 3vw, 3.4rem);
+  align-items: end;
+  color: rgba(51, 64, 63, 0.5);
+}
+
+.dp2-study-context span {
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.dp2-study-context strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--dp2-font-display);
+  font-size: clamp(1rem, 1.25vw, 1.35rem);
+  font-weight: 600;
+  color: rgba(51, 64, 63, 0.7);
+}
+
+.dp2-study-rail {
+  grid-template-rows: auto auto minmax(19rem, 1fr) !important;
+  gap: clamp(0.85rem, 2vh, 1.5rem) !important;
+  height: 100% !important;
+}
+
+.dp2-rail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.95rem;
+  align-items: center;
+  justify-content: flex-start;
+  max-width: 22rem;
+  padding-top: 0.2rem;
+}
+
+.dp2-rail-actions .dp2-button {
+  padding-inline: 0.1rem;
+}
+
+.dp2-path {
+  transform: none !important;
+  margin-top: clamp(0.9rem, 2.2vh, 1.8rem);
+  max-height: min(24rem, 46dvh) !important;
+}
+
+.dp2-button:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.dp2-button:disabled::after {
+  opacity: 0;
+}
+
+.dp2-options button.is-selected {
+  color: rgba(51, 64, 63, 0.94);
+  transform: translateX(0.18rem);
+}
+
+.dp2-options button.is-selected::before {
+  opacity: 1;
+  background: linear-gradient(90deg, rgba(86, 122, 126, 0.72), rgba(180, 146, 113, 0.48), transparent);
+}
+
+.dp2-options button.is-selected span {
+  background: rgba(180, 146, 113, 0.24);
+  color: rgba(51, 64, 63, 0.88);
+}
+
+.dp2-quiz-board {
+  height: 100% !important;
+  min-height: 0 !important;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.36fr) !important;
+  grid-template-rows: minmax(0, 1fr) auto !important;
+  overflow: hidden !important;
+}
+
+.dp2-quiz > .dp2-section-title {
+  min-height: min(29rem, calc(100dvh - 11rem)) !important;
+}
+
+.dp2-quiz-focus {
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.dp2-quiz-strip {
+  position: relative;
+  align-self: stretch;
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: min(32rem, calc(100dvh - 12rem)) !important;
+  display: grid !important;
+  align-content: start !important;
+  gap: 0.42rem !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  padding: min(15vh, 5.8rem) 0 !important;
+  mask-image: linear-gradient(to bottom, transparent, black 16%, black 84%, transparent);
+}
+
+.dp2-quiz-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.dp2-quiz-strip button {
+  display: grid !important;
+  grid-template-columns: 2.55rem minmax(0, 1fr) !important;
+  gap: 0.72rem !important;
+  align-items: center !important;
+  min-height: 2.2rem !important;
+  padding: 0.08rem 0 !important;
+  white-space: nowrap !important;
+  opacity: 0.42;
+  transform: scale(0.84);
+  transform-origin: left center;
+  scroll-snap-align: center;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease,
+    color 180ms ease;
+}
+
+.dp2-quiz-strip button i {
+  display: none !important;
+}
+
+.dp2-quiz-strip button b {
+  grid-column: 1;
+  min-width: 2.55rem;
+  font-family: var(--dp2-font-display);
+  font-size: 0.94rem;
+  font-weight: 600;
+  color: rgba(51, 64, 63, 0.42);
+  line-height: 1;
+  transition: font-size 180ms ease, color 180ms ease;
+}
+
+.dp2-quiz-strip button span {
+  grid-column: 2;
+  display: block !important;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap !important;
+  line-height: 1.2;
+  transition: font-size 180ms ease, color 180ms ease;
+}
+
+.dp2-quiz-strip button.is-near {
+  opacity: 0.68;
+  transform: scale(0.94);
+}
+
+.dp2-quiz-strip button.is-done b::after {
+  content: "";
+  display: inline-block;
+  width: 0.28rem;
+  height: 0.28rem;
+  margin-left: 0.28rem;
+  border-radius: 50%;
+  background: rgba(142, 166, 176, 0.72);
+  vertical-align: middle;
+  box-shadow: 0 0 0 0.22rem rgba(142, 166, 176, 0.1);
+}
+
+.dp2-quiz-strip button.is-now b,
+.dp2-quiz-strip button.is-now span {
+  color: rgba(51, 64, 63, 0.88);
+}
+
+.dp2-quiz-strip button.is-now {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.dp2-quiz-strip button.is-now b {
+  font-size: 1.38rem;
+  color: rgba(103, 91, 73, 0.92);
+}
+
+.dp2-quiz-strip button.is-now span {
+  font-size: 0.98rem;
+  color: rgba(51, 64, 63, 0.9);
+}
+
+.dp2-quiz-actions {
+  justify-content: center;
 }
 
 .dp2-resource-mode.is-active span {
