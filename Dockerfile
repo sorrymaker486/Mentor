@@ -1,4 +1,4 @@
-# 生产镜像：同域提供 Vite 前端 + FastAPI（浏览器请求 /api → 后端路由）
+# Production image: serve the Vite frontend and FastAPI backend from one container.
 FROM node:22-alpine AS frontend-build
 WORKDIR /fe
 COPY frontend/package.json frontend/package-lock.json ./
@@ -21,5 +21,4 @@ COPY --from=frontend-build /fe/dist ./static
 
 WORKDIR /app/backend
 EXPOSE 8001
-# Render / Fly 等会注入 PORT；本地默认 8001
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8001}"]
