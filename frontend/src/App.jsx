@@ -69,7 +69,7 @@ const CodeBlock = ({ language, value }) => {
 const normalizeMathText = (text) => {
   if (!text) return text;
 
-  let t = text;
+  let t = String(text).replace(/\r\n?/g, '\n').replace(/\u2028|\u2029/g, '\n');
 
   t = t
     .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m.trim()}$`)
@@ -90,6 +90,112 @@ const normalizeMathText = (text) => {
     if (next === t) break;
     t = next;
   }
+
+  const inlineMathOnly = /^\s*\$(?!\$)([\s\S]{1,160}?)\$(?!\$)\s*$/;
+  const mathOnly = /^\s*(\$\$|\$)([\s\S]{1,160}?)\1\s*$/;
+  const blockLike = /^\s*(#{1,6}\s|[-*+]\s+|\d+\.\s+|>|```|~~~|\|)/;
+  const listItemLike = /^\s*(?:[-*+]\s+|\d+\.\s+)/;
+  const connectorOnly = /^[,，.。;；:：()（）[\]{}=<>+\-*/|]+$/;
+  const mathSymbolOnly =
+    /^(?=.{1,28}$)(?!.*[\p{Script=Han}，。！？、；：])[\p{Letter}\p{Number}_{}^\\+\-*/=<>|.,()[\]∅∞∈∉⊂⊆⊃⊇∪∩∘°]+$/u;
+  const looseMathExpression =
+    /^(?=.{1,40}$)(?!.*[\p{Script=Han}，。！？、；：])[\p{Letter}\p{Number}\s_{}^\\+\-*/=<>|.,()[\]∅∞∈∉⊂⊆⊃⊇∪∩∘°]+$/u;
+  const cleanMathBody = (value) => {
+    const body = String(value).replace(/\s+/g, ' ').trim();
+    if (!body || body.length > 80 || /\\begin|\\\\/.test(body)) return null;
+    if (/[\p{Script=Han}，。！？、；：]/u.test(body)) return null;
+    if (!/[\p{Letter}\p{Number}\\∅∞∈∉⊂⊆⊃⊇∪∩∘°]/u.test(body)) return null;
+    return body;
+  };
+  const shortMathPart = (value) => {
+    const match = String(value).trim().match(mathOnly);
+    if (!match) return null;
+    const body = cleanMathBody(match[2]);
+    if (!body) return null;
+    return `$${body}$`;
+  };
+  const inlineMathPart = (value) => {
+    const part = String(value).trim();
+    const inlineMatch = part.match(inlineMathOnly);
+    if (inlineMatch) {
+      const body = cleanMathBody(inlineMatch[1]);
+      return body ? `$${body}$` : part;
+    }
+    const mathPart = shortMathPart(part);
+    if (mathPart) return mathPart;
+    const body = cleanMathBody(part);
+    if (body && mathSymbolOnly.test(body)) return `$${body}$`;
+    if (body && looseMathExpression.test(body)) return `$${body}$`;
+    return null;
+  };
+  const combineAdjacentInlineMath = (value) => {
+    let next = value;
+    for (let i = 0; i < 6; i += 1) {
+      const prev = next;
+      next = next
+        .replace(
+          /\$([^$\n]+?)\$\s*([,，;；:：])\s*\$([^$\n]+?)\$/g,
+          (_, a, op, b) => `$${a.trim()}${op} ${b.trim()}$`
+        )
+        .replace(
+          /\$([^$\n]+?)\$\s+([=+\-*/<>|∈∉⊂⊆⊃⊇∪∩∘])\s+\$([^$\n]+?)\$/g,
+          (_, a, op, b) => `$${a.trim()} ${op} ${b.trim()}$`
+        )
+        .replace(
+          /\$([^$\n]+?)\$\s+\$([^$\n]+?)\$/g,
+          (_, a, b) => `$${a.trim()} ${b.trim()}$`
+        );
+      if (next === prev) break;
+    }
+    return next;
+  };
+  const mergeLooseInlineMath = (chunk) => {
+    const prepared = chunk.replace(
+      /(^|\n)\s*\$\$\s*([\s\S]{1,160}?)\s*\$\$\s*(?=\n|$)/g,
+      (match, lead, body) => {
+        const expr = cleanMathBody(body);
+        if (!expr) return match;
+        return `${lead}$${expr}$`;
+      }
+    );
+    const parts = prepared.split(/\n{2,}/);
+    const out = [];
+    let mergeNext = false;
+
+    const joinSoftBreaks = (value) => {
+      const trimmed = value.trim();
+      return blockLike.test(trimmed) ? trimmed : trimmed.replace(/[ \t]*\n[ \t]*/g, ' ');
+    };
+
+    for (let i = 0; i < parts.length; i += 1) {
+      const part = joinSoftBreaks(parts[i]);
+      if (!part) continue;
+
+      const next = joinSoftBreaks(parts[i + 1] || '');
+      const prev = out[out.length - 1] || '';
+      const inlinePart = inlineMathPart(part);
+      const prevCanAcceptInline = prev && (!blockLike.test(prev) || listItemLike.test(prev));
+      const canMergeMath =
+        inlinePart &&
+        prevCanAcceptInline;
+      const canContinueMathPhrase = mergeNext && !blockLike.test(part);
+
+      if (canMergeMath || canContinueMathPhrase) {
+        out[out.length - 1] = `${prev.replace(/\s+$/, '')} ${inlinePart || part}`;
+        mergeNext = canMergeMath || Boolean(inlinePart) || connectorOnly.test(part.trim());
+      } else {
+        out.push(part);
+        mergeNext = false;
+      }
+    }
+
+    return combineAdjacentInlineMath(out.join('\n\n'));
+  };
+
+  t = t
+    .split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g)
+    .map((chunk) => (/^(```|~~~)/.test(chunk) ? chunk : mergeLooseInlineMath(chunk)))
+    .join('');
 
   return t;
 };
@@ -1796,11 +1902,9 @@ const SubjectGridExactV29 = ({ onSelectSubject }) => (
       </section>
       <section className="dp2-subject-list" aria-label="课程选择">
         {v29Subjects.map(([title, topic, state, progress], index) => (
-          <button
+          <article
             key={title}
             className={`dp2-subject is-${state}`}
-            type="button"
-            onClick={() => onSelectSubject(title)}
             style={{ '--p': `${progress}%`, animationDelay: `${index * 55}ms` }}
           >
             <span className="dp2-course-no">{String(index + 1).padStart(2, '0')}</span>
@@ -1815,6 +1919,14 @@ const SubjectGridExactV29 = ({ onSelectSubject }) => (
                 <small>{v29CourseShowcase[index][2]}</small>
               </span>
             </span>
+            <span className="dp2-course-mode-row" aria-label={`${title} 学习模式`}>
+              <button type="button" className="dp2-course-mode is-guided" onClick={() => onSelectSubject(title, 'guided')}>
+                AI 带学
+              </button>
+              <button type="button" className="dp2-course-mode" onClick={() => onSelectSubject(title, 'free')}>
+                自由提问
+              </button>
+            </span>
             <span className="dp2-course-mark" aria-hidden>
               <span />
               <b />
@@ -1822,7 +1934,7 @@ const SubjectGridExactV29 = ({ onSelectSubject }) => (
             <i className="dp2-course-line" aria-label={`${title} 进度`}>
               <b />
             </i>
-          </button>
+          </article>
         ))}
       </section>
     </div>
@@ -1830,7 +1942,7 @@ const SubjectGridExactV29 = ({ onSelectSubject }) => (
 );
 
 // --- 3. 对话界面：会话列表 + 章节目录（大章 / 小节，数据来自后端 /learning-catalog）---
-const ChatView = ({ subject, username, onBack }) => {
+const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
   const welcomeMessage = { role: 'assistant', content: `你好 **${username}**！欢迎来到 **${subject}** 导师课堂。` };
 
   const [catalog, setCatalog] = useState([]);
@@ -1856,11 +1968,14 @@ const ChatView = ({ subject, username, onBack }) => {
   const [studioPanel, setStudioPanel] = useState('study');
   const [visitedSections, setVisitedSections] = useState([]);
   const [progress, setProgress] = useState({ sections: {}, chapters: {}, sectionRule: null });
-  const [learnMode, setLearnMode] = useState(false);
+  const [learnMode, setLearnMode] = useState(initialMode === 'guided');
   const [quizModal, setQuizModal] = useState(null);
   const [chapterPanelWidth] = useState(380);
 
   const messagesEndRef = useRef(null);
+  const dialogueScrollRef = useRef(null);
+  const legacyMessagesScrollRef = useRef(null);
+  const outputStartScrollFrameRef = useRef(null);
   const imageInputRef = useRef(null);
   const bufferRef = useRef('');
   const displayRef = useRef('');
@@ -1868,6 +1983,7 @@ const ChatView = ({ subject, username, onBack }) => {
   const rafRef = useRef(null);
   const readerRef = useRef(null);
   const quizStripRef = useRef(null);
+  const guidedAutoStartedRef = useRef(false);
   /** 刚流式输出完的会话 id：在此 id 的历史尚未可查时不要用「空历史 → 欢迎页」覆盖界面 */
   const preferUiOverHistoryUntilRef = useRef(null);
 
@@ -1891,13 +2007,31 @@ const ChatView = ({ subject, username, onBack }) => {
     return '';
   }, [selectedChapterId, selectedSectionId]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  const getMessagesScroller = () => dialogueScrollRef.current || legacyMessagesScrollRef.current;
+
+  const scrollMessagesToBottom = (behavior = 'smooth') => {
+    const el = getMessagesScroller();
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior });
+      return;
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior });
+  };
+
+  const scrollMessagesOnOutputStart = () => {
+    if (outputStartScrollFrameRef.current) cancelAnimationFrame(outputStartScrollFrameRef.current);
+    outputStartScrollFrameRef.current = requestAnimationFrame(() => {
+      outputStartScrollFrameRef.current = requestAnimationFrame(() => {
+        scrollMessagesToBottom('auto');
+        outputStartScrollFrameRef.current = null;
+      });
+    });
+  };
 
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (outputStartScrollFrameRef.current) cancelAnimationFrame(outputStartScrollFrameRef.current);
       try {
         readerRef.current?.cancel?.();
       } catch {}
@@ -2037,11 +2171,12 @@ const ChatView = ({ subject, username, onBack }) => {
     setSelectedChapterId('');
     setSelectedSectionId('');
     setExpandedChapters({});
-    setLearnMode(false);
+    setLearnMode(initialMode === 'guided');
     setQuizModal(null);
     setProgress({ sections: {}, chapters: {}, sectionRule: null });
     setChapterRightTab('catalog');
     setStudioPanel('study');
+    guidedAutoStartedRef.current = false;
     preferUiOverHistoryUntilRef.current = null;
 
     loadSessions();
@@ -2080,19 +2215,11 @@ const ChatView = ({ subject, username, onBack }) => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [username, subject]);
+  }, [username, subject, initialMode]);
 
   useEffect(() => {
     localStorage.setItem(progressKey, JSON.stringify(visitedSections));
   }, [visitedSections, progressKey]);
-
-  const markSectionVisited = (key) => {
-    if (!key) return;
-    setVisitedSections((prev) => {
-      if (prev.includes(key)) return prev;
-      return [...prev, key];
-    });
-  };
 
   const passedSectionCount = useMemo(() => {
     return Object.values(progress.sections || {}).filter((x) => x.small_quiz_passed).length;
@@ -2156,7 +2283,7 @@ const ChatView = ({ subject, username, onBack }) => {
   };
 
   useEffect(() => {
-    if (!sessionScopeKey) return;
+    if (!learnMode || !sessionScopeKey) return;
 
     /** 带学首轮请求进行中：勿清空消息、勿自动切到旧会话（否则会 loadHistory 覆盖流式界面）。 */
     if (learnMode && isLoading) return;
@@ -2225,6 +2352,7 @@ const ChatView = ({ subject, username, onBack }) => {
 
   const startLearn = async () => {
     if (!selectedChapterId || !selectedSectionId || isLoading) return;
+    scrollMessagesOnOutputStart();
     setIsLoading(true);
     setLearnMode(true);
     setMessages([{ role: 'assistant', content: '' }]);
@@ -2286,8 +2414,18 @@ const ChatView = ({ subject, username, onBack }) => {
     }
   };
 
+  useEffect(() => {
+    if (initialMode !== 'guided') return;
+    if (guidedAutoStartedRef.current || catalogLoading || isLoading) return;
+    if (!selectedChapterId || !selectedSectionId) return;
+    guidedAutoStartedRef.current = true;
+    void startLearn();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialMode, selectedChapterId, selectedSectionId, catalogLoading, isLoading]);
+
   const startRemedialLearn = async (quizResult) => {
     if (!selectedChapterId || !selectedSectionId) return;
+    scrollMessagesOnOutputStart();
     const note = quizResult?.remedial_prompt || '小节测验未达标，请继续针对薄弱点带学。';
     setIsLoading(true);
     setLearnMode(true);
@@ -2343,6 +2481,7 @@ const ChatView = ({ subject, username, onBack }) => {
   };
 
   const handleLearnAnswer = async (text, imageSnapshot = []) => {
+    scrollMessagesOnOutputStart();
     setIsLoading(true);
     setInputText('');
     try {
@@ -2699,7 +2838,7 @@ const ChatView = ({ subject, username, onBack }) => {
   const handleSend = async (customMsg) => {
     const text = (customMsg || inputText).trim();
     if (isLoading) return;
-    if (!selectedChapterId || !selectedSectionId) return;
+    if (learnMode && (!selectedChapterId || !selectedSectionId)) return;
 
     if (learnMode) {
       if (!text.trim() && !pendingImages.length) return;
@@ -2714,6 +2853,7 @@ const ChatView = ({ subject, username, onBack }) => {
 
     const imageSnapshot = [...pendingImages];
     const userContent = packUserAskForDisplay(text, imageSnapshot);
+    scrollMessagesOnOutputStart();
     setMessages((prev) => [...prev, { role: 'user', content: userContent }, { role: 'assistant', content: '' }]);
     setInputText('');
     setPendingImages([]);
@@ -2725,7 +2865,7 @@ const ChatView = ({ subject, username, onBack }) => {
 
     try {
       const sessionPart = currentSessionId ? `&session_id=${encodeURIComponent(currentSessionId)}` : '';
-      const scopePart = `&chapter_id=${encodeURIComponent(selectedChapterId)}&section_id=${encodeURIComponent(selectedSectionId)}&chapter=${encodeURIComponent(scopeLabel || '')}`;
+      const scopePart = '';
       let response;
       if (imageSnapshot.length) {
         response = await fetch(`${API_BASE}/ask`, {
@@ -2735,9 +2875,6 @@ const ChatView = ({ subject, username, onBack }) => {
             username,
             subject,
             question: text,
-            chapter_id: selectedChapterId,
-            section_id: selectedSectionId,
-            chapter: scopeLabel || '',
             session_id: currentSessionId || undefined,
             images: imageSnapshot.map((x) => ({ media_type: x.mediaType, data_b64: x.dataB64 })),
           }),
@@ -2780,7 +2917,6 @@ const ChatView = ({ subject, username, onBack }) => {
       }
 
       await loadSessions();
-      markSectionVisited(sessionScopeKey);
 
       if (returnedSessionId) {
         const numericId = Number(returnedSessionId);
@@ -2846,17 +2982,29 @@ const ChatView = ({ subject, username, onBack }) => {
     setQuizIndex((index) => Math.max(0, Math.min(quizQuestions.length - 1, index + direction)));
   };
 
-  const v29PathRows =
+  const v29PathChapters =
     catalog.length > 0
-      ? catalog.flatMap((chapter) =>
-          (chapter.sections || []).map((section) => ({
+      ? catalog.map((chapter) => ({
+          key: chapter.id,
+          title: chapter.title,
+          desc: chapter.desc,
+          chapter,
+          sections: (chapter.sections || []).map((section) => ({
             key: `${chapter.id}|${section.id}`,
             title: section.title,
             chapter,
             section,
-          }))
-        )
-      : v29PathItems.map((item, index) => ({ key: item, title: item, fallbackIndex: index }));
+          })),
+        }))
+      : [
+          {
+            key: 'fallback',
+            title: '学习路径',
+            desc: '目录同步后会显示大章与小节。',
+            fallback: true,
+            sections: v29PathItems.map((item, index) => ({ key: item, title: item, fallbackIndex: index })),
+          },
+        ];
 
   if (studioPanel === 'resources') {
     return (
@@ -2888,13 +3036,16 @@ const ChatView = ({ subject, username, onBack }) => {
             <strong>{scopeLabel || '选择小节后开始学习'}</strong>
           </div>
 
-          <div className="dp2-dialogue">
-            {messages.slice(-5).map((m, i) => {
+          <div
+            className="dp2-dialogue"
+            ref={dialogueScrollRef}
+          >
+            {messages.map((m, i) => {
               const isUser = m.role === 'user';
               const assistantTyping =
                 m.role === 'assistant' &&
                 isLoading &&
-                i === messages.slice(-5).length - 1 &&
+                i === messages.length - 1 &&
                 !(typeof m.content === 'string' && m.content.trim());
 
               return (
@@ -2936,7 +3087,7 @@ const ChatView = ({ subject, username, onBack }) => {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleSend();
               }}
-              placeholder={learnMode ? `回答当前小节：${scopeLabel || ''}` : '输入你的问题'}
+              placeholder={learnMode ? `回答当前小节：${scopeLabel || ''}` : '自由提问，不限定章节'}
               aria-label="输入你的问题"
             />
             <V29Button onClick={() => handleSend()} disabled={isLoading}>发送</V29Button>
@@ -2947,7 +3098,13 @@ const ChatView = ({ subject, username, onBack }) => {
           <section className="dp2-plan">
             <div className="dp2-mini-label">PLAN</div>
             <h3>当前阶段</h3>
-            <p>{scopeLabel ? `正在学习：${scopeLabel}` : '先选择小节，再进入带学或小测。'}</p>
+            <p>
+              {learnMode
+                ? scopeLabel
+                  ? `AI 带学：${scopeLabel}`
+                  : '先选择小节，再进入 AI 带学。'
+                : '自由提问：不限定章节。'}
+            </p>
             <ol>
               <li>观察当前知识节点</li>
               <li>完成对话带学</li>
@@ -2971,40 +3128,64 @@ const ChatView = ({ subject, username, onBack }) => {
             {!catalogLoading && catalogErr && <div className="dp2-path-item"><span /><strong>目录加载失败</strong><small>{catalogErr}</small></div>}
             {!catalogLoading &&
               !catalogErr &&
-              v29PathRows.map((item, index) => {
-                const active = item.chapter?.id === selectedChapterId && item.section?.id === selectedSectionId;
-                const status =
-                  item.fallbackIndex != null
-                    ? item.fallbackIndex < 2
-                      ? '已完成'
-                      : item.fallbackIndex === 2
-                        ? '进行中'
-                        : '待开启'
-                    : progress.sections?.[item.key]?.small_quiz_passed
-                      ? '已完成'
-                      : active
-                        ? '进行中'
-                        : '待开启';
+              v29PathChapters.map((chapter, chapterIndex) => {
+                const open = chapter.fallback || expandedChapters[chapter.key] || chapter.sections.some((item) => item.chapter?.id === selectedChapterId);
+                const passedCount = chapter.sections.filter((item) => progress.sections?.[item.key]?.small_quiz_passed).length;
                 return (
-                  <button
-                    key={item.key}
-                    type="button"
-                    className={`dp2-path-item ${active ? 'is-active' : ''}`}
-                    style={{ animationDelay: `${index * 80}ms` }}
-                    onClick={() => {
-                      if (!item.chapter || !item.section) return;
-                      setLearnMode(false);
-                      setSelectedChapterId(item.chapter.id);
-                      setSelectedSectionId(item.section.id);
-                      setExpandedChapters((prev) => ({ ...prev, [item.chapter.id]: true }));
-                      const matched = sessions.filter((s) => s.chapter === item.key);
-                      setCurrentSessionId(matched[0]?.id ?? null);
-                    }}
-                  >
-                    <span />
-                    <strong>{item.title}</strong>
-                    <small>{status}</small>
-                  </button>
+                  <div className={`dp2-path-chapter ${open ? 'is-open' : ''}`} key={chapter.key} style={{ animationDelay: `${chapterIndex * 90}ms` }}>
+                    <button
+                      type="button"
+                      className="dp2-path-chapter-head"
+                      onClick={() => {
+                        if (chapter.fallback) return;
+                        setExpandedChapters((prev) => ({ ...prev, [chapter.key]: !open }));
+                      }}
+                    >
+                      <span />
+                      <strong>{chapter.title}</strong>
+                      <small>{chapter.sections.length ? `${passedCount}/${chapter.sections.length}` : '同步中'}</small>
+                    </button>
+                    {open && (
+                      <div className="dp2-path-section-list">
+                        {chapter.sections.map((item, index) => {
+                          const active = item.chapter?.id === selectedChapterId && item.section?.id === selectedSectionId;
+                          const status =
+                            item.fallbackIndex != null
+                              ? item.fallbackIndex < 2
+                                ? '已完成'
+                                : item.fallbackIndex === 2
+                                  ? '进行中'
+                                  : '待开启'
+                              : progress.sections?.[item.key]?.small_quiz_passed
+                                ? '已完成'
+                                : active
+                                  ? '进行中'
+                                  : '待开启';
+                          return (
+                            <button
+                              key={item.key}
+                              type="button"
+                              className={`dp2-path-item ${active ? 'is-active' : ''}`}
+                              style={{ animationDelay: `${index * 55}ms` }}
+                              onClick={() => {
+                                if (!item.chapter || !item.section) return;
+                                setLearnMode(false);
+                                setSelectedChapterId(item.chapter.id);
+                                setSelectedSectionId(item.section.id);
+                                setExpandedChapters((prev) => ({ ...prev, [item.chapter.id]: true }));
+                                const matched = sessions.filter((s) => s.chapter === item.key);
+                                setCurrentSessionId(matched[0]?.id ?? null);
+                              }}
+                            >
+                              <span />
+                              <strong>{item.title}</strong>
+                              <small>{status}</small>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
           </section>
@@ -3282,7 +3463,10 @@ const ChatView = ({ subject, username, onBack }) => {
         <div className="pa-hline-runner absolute inset-x-0 top-0 z-10" aria-hidden />
         {/* 左侧垂直 Scroll 扫描线（极细金线） */}
         <div className="pa-vscan absolute bottom-6 left-3 top-6 z-10 hidden md:block" aria-hidden />
-        <div className="scrollbar-hide relative z-10 min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-8 md:py-6">
+        <div
+          className="scrollbar-hide relative z-10 min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-8 md:py-6"
+          ref={legacyMessagesScrollRef}
+        >
           <div className="mx-auto max-w-3xl space-y-10">
             {messages.map((m, i) => {
               const assistantTyping =
@@ -3782,6 +3966,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(localStorage.getItem('currentUser') || '');
   const [appStep, setAppStep] = useState(localStorage.getItem('currentUser') ? 'subjects' : 'login');
   const [selectedSubject, setSelectedSubject] = useState(null);
+  const [selectedStudyMode, setSelectedStudyMode] = useState('free');
   const [introDone, setIntroDone] = useState(false);
   const liveRootRef = useRef(null);
   const isDesignPreview =
@@ -3838,14 +4023,16 @@ export default function App() {
         <SubjectGridExactV29
           apiBase={API_BASE}
           username={currentUser}
-          onSelectSubject={(n) => {
+          onSelectSubject={(n, mode = 'free') => {
             setSelectedSubject(n);
+            setSelectedStudyMode(mode === 'guided' ? 'guided' : 'free');
             setAppStep('chat');
           }}
           onLogout={() => {
             localStorage.removeItem('currentUser');
             setCurrentUser('');
             setSelectedSubject(null);
+            setSelectedStudyMode('free');
             setAppStep('login');
           }}
         />
@@ -3855,6 +4042,7 @@ export default function App() {
         <ChatView
           subject={selectedSubject}
           username={currentUser}
+          initialMode={selectedStudyMode}
           onBack={() => setAppStep('subjects')}
         />
       )}

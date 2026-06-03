@@ -5,43 +5,260 @@
   overflow: hidden;
   pointer-events: auto;
   background:
-    radial-gradient(ellipse 88% 72% at 50% 50%, rgba(255, 255, 255, 0.5) 0%, transparent 58%),
-    linear-gradient(165deg, #f0ebe4 0%, #e8e2d8 50%, #e0d8ce 100%);
+    radial-gradient(ellipse 88% 72% at 50% 50%, rgba(255, 255, 255, 0.26) 0%, transparent 58%),
+    linear-gradient(165deg, #ebe4d8 0%, #dfe3d8 52%, #e3d8c9 100%);
+}
+
+.root::before,
+.root::after {
+  content: "";
+  position: absolute;
+  inset: -12%;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.root::before {
+  background:
+    linear-gradient(106deg, transparent 0 43%, rgba(130, 155, 163, 0.13) 48%, transparent 53%),
+    linear-gradient(174deg, transparent 0 46%, rgba(169, 136, 98, 0.1) 50%, transparent 55%),
+    repeating-linear-gradient(90deg, rgba(67, 87, 85, 0.032) 0 1px, transparent 1px 7.2rem);
+  background-size: 58rem 100%, 72rem 100%, 100% 100%;
+  opacity: 0.38;
+  mask-image: radial-gradient(ellipse at center, #000 0 58%, transparent 78%);
+  animation: loaderFieldDrift 9s linear infinite;
+}
+
+.root::after {
+  background:
+    radial-gradient(circle at 35% 48%, rgba(130, 155, 163, 0.14), transparent 15%),
+    radial-gradient(circle at 67% 54%, rgba(169, 136, 98, 0.12), transparent 18%);
+  opacity: 0.32;
+  filter: blur(14px);
+  animation: loaderFieldPulse 4.2s ease-in-out infinite;
 }
 
 .particles {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  z-index: 2;
   width: 100%;
   height: 100%;
   pointer-events: none;
 }
 
-/* 百分比：固定在视口正中央，小号不抢眼 */
-.pctCenter {
-  position: fixed;
+.loaderShell {
+  position: relative;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-rows: 1fr auto 1fr;
+  align-items: center;
+  pointer-events: none;
+  animation: loaderRise 0.72s cubic-bezier(0.2, 1, 0.24, 1) both;
+}
+
+.loaderTop,
+.loaderBottom {
+  width: min(78rem, 88vw);
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: rgba(51, 64, 63, 0.34);
+  font-size: 0.58rem;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.loaderTop {
+  justify-content: flex-start;
+}
+
+.loaderBottom {
+  justify-content: flex-end;
+}
+
+.loaderMid {
+  position: relative;
+  width: min(78rem, 88vw);
+  min-height: 5.8rem;
+  justify-self: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2rem;
+  align-items: center;
+  transform: translateY(-2.9rem);
+}
+
+.loaderCopy strong {
+  display: block;
+  font-family: "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+  font-size: clamp(0.98rem, 1.85vw, 1.58rem);
+  line-height: 1.02;
+  font-weight: 700;
+  color: rgba(51, 64, 63, 0.78);
+}
+
+.loaderCopy p {
+  max-width: 16rem;
+  margin: 0.42rem 0 0;
+  color: rgba(51, 64, 63, 0.42);
+  font-size: 0.72rem;
+  line-height: 1.7;
+}
+
+.loaderNodes {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  transform: translateY(2.9rem);
+}
+
+.loaderNodes i {
+  position: relative;
+  width: 0.46rem;
+  height: 0.46rem;
+  padding-top: 0;
+  color: rgba(51, 64, 63, 0.36);
+  font-size: 0.56rem;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  animation: nodeBreathe 3.4s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -0.36s);
+}
+
+.loaderNodes i::before {
+  content: "";
+  position: absolute;
   left: 50%;
   top: 50%;
+  width: 0.28rem;
+  height: 0.28rem;
+  border-radius: 50%;
+  background: rgba(82, 111, 114, 0.58);
+  box-shadow: 0 0 10px rgba(130, 155, 163, 0.36);
   transform: translate(-50%, -50%);
-  z-index: 10;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: clamp(0.95rem, 2.8vw, 1.15rem);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
-  line-height: 1;
-  color: rgba(26, 31, 36, 0.78);
-  text-shadow: 0 0 18px rgba(252, 250, 246, 0.9);
-  pointer-events: none;
-  padding: 0.2rem 0.45rem;
-  border-radius: 6px;
-  background: rgba(252, 250, 246, 0.45);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+}
+
+.loaderMeter {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 50%;
+  z-index: 4;
+  height: 8px;
+  overflow: hidden;
+  transform: translateY(-50%);
+}
+
+.loaderMeter::before,
+.loaderMeter::after,
+.loaderMeter span,
+.loaderMeter b,
+.loaderMeter span::before,
+.loaderMeter span::after,
+.loaderMeter b::before,
+.loaderMeter b::after {
+  content: "";
+  position: absolute;
+}
+
+.loaderMeter::before {
+  left: 0;
+  right: 0;
+  top: calc(50% - 0.75px);
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent, rgba(47, 73, 76, 0.24) 11%, rgba(47, 73, 76, 0.52) 50%, rgba(47, 73, 76, 0.24) 89%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 9%, #000 91%, transparent);
+}
+
+.loaderMeter::after {
+  left: 0;
+  right: 0;
+  top: calc(50% - 4px);
+  height: 8px;
+  background: linear-gradient(90deg, transparent, rgba(91, 124, 130, 0.12) 18%, rgba(156, 120, 78, 0.12) 50%, rgba(91, 110, 124, 0.1) 82%, transparent);
+  filter: blur(2px);
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  opacity: 0.72;
+}
+
+.loaderMeter span {
+  left: 0;
+  top: calc(50% - 1.75px);
+  width: var(--pct);
+  height: 3.5px;
+  overflow: visible;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(54, 85, 89, 0.92), rgba(118, 103, 85, 0.78) 58%, rgba(88, 106, 121, 0.56));
+  mask-image: linear-gradient(90deg, #000 0%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 88%, transparent 100%);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.5),
-    0 6px 20px rgba(26, 31, 36, 0.05);
+    0 0 8px rgba(91, 124, 130, 0.28),
+    0 0 16px rgba(156, 120, 78, 0.16);
+  transition: width 110ms linear;
+}
+
+.loaderMeter span::before {
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.42) 45%, transparent 72%);
+  background-size: 18rem 100%;
+  opacity: 0.34;
+  animation: meterVein 5.8s ease-in-out infinite;
+}
+
+.loaderMeter span::after {
+  right: -0.12rem;
+  top: 50%;
+  width: 0.32rem;
+  height: 0.32rem;
+  border-radius: 999px;
+  background: rgba(248, 245, 239, 0.72);
+  box-shadow:
+    0 0 0 1px rgba(47, 73, 76, 0.18),
+    0 0 10px rgba(91, 124, 130, 0.3),
+    0 0 14px rgba(156, 120, 78, 0.18);
+  transform: translateY(-50%);
+  animation: meterHeadPulse 1.8s ease-in-out infinite;
+}
+
+.loaderMeter b {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 0;
+  display: block;
+  pointer-events: none;
+}
+
+.loaderMeter b::before,
+.loaderMeter b::after {
+  top: 50%;
+  width: clamp(5rem, 15vw, 14rem);
+  height: 1.05rem;
+  opacity: 0.5;
+  filter: blur(8px);
+  transform: translateY(-50%) scaleX(0.86);
+  animation: meterEndBreath 3.8s ease-in-out infinite;
+}
+
+.loaderMeter b::before {
+  left: 0;
+  background: linear-gradient(90deg, rgba(69, 101, 106, 0.52), rgba(156, 120, 78, 0.18), transparent);
+  transform-origin: left center;
+}
+
+.loaderMeter b::after {
+  right: 0;
+  background: linear-gradient(270deg, rgba(69, 101, 106, 0.5), rgba(156, 120, 78, 0.16), transparent);
+  transform-origin: right center;
+  animation-delay: -1.9s;
 }
 
 .root.exiting {
@@ -56,15 +273,134 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .root.exiting {
-    animation: fadeOnly 0.32s ease forwards !important;
-    transform: none !important;
+@keyframes loaderRise {
+  from {
+    opacity: 0;
+    transform: translateY(0.8rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes loaderFieldDrift {
+  to {
+    background-position: 58rem 0, -72rem 0, 3.6rem 0;
+  }
+}
+
+@keyframes loaderFieldPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.32;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 0.58;
+  }
+}
+
+@keyframes nodeBreathe {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.92;
+    transform: translateY(-0.18rem);
+  }
+}
+
+@keyframes meterParticles {
+  to {
+    background-position: 11rem 0, -20rem 0;
+  }
+}
+
+@keyframes meterVein {
+  to {
+    background-position: 18rem 0;
+  }
+}
+
+@keyframes meterHeadPulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: translateY(-50%) scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-50%) scale(1.2);
+  }
+}
+
+@keyframes meterScan {
+  0%,
+  100% {
+    transform: translateX(-16vw);
+  }
+  50% {
+    transform: translateX(16vw);
+  }
+}
+
+@keyframes meterEndBreath {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(-50%) scaleX(0.72);
+  }
+  50% {
+    opacity: 0.66;
+    transform: translateY(-50%) scaleX(1);
   }
 }
 
 @keyframes fadeOnly {
   to {
     opacity: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .loaderTop,
+  .loaderBottom,
+  .loaderMid {
+    width: min(34rem, 88vw);
+  }
+
+  .loaderMid {
+    grid-template-columns: 1fr;
+    gap: 0.9rem;
+    transform: translateY(-2.2rem);
+  }
+
+  .loaderNodes {
+    justify-content: space-between;
+    transform: translateY(2.1rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .root.exiting {
+    animation: fadeOnly 0.32s ease forwards !important;
+    transform: none !important;
+  }
+
+  .loaderShell,
+  .loaderNodes i,
+  .root::before,
+  .root::after,
+  .loaderMeter::after,
+  .loaderMeter span::before,
+  .loaderMeter span::after,
+  .loaderMeter b,
+  .loaderMeter b::before,
+  .loaderMeter b::after {
+    animation: none !important;
   }
 }

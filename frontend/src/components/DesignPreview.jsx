@@ -257,16 +257,14 @@ function LoadingPage() {
       <div className="dp2-loader">
         <div className="dp2-loader-top">
           <span>MENTOR</span>
-          <small>同步学习场</small>
         </div>
         <div className="dp2-loader-mid">
           <div>
-            <strong>学习场载入</strong>
-            <p>连接画像、章节、资源。</p>
+            <strong>同步中</strong>
           </div>
           <div className="dp2-loader-specks" aria-hidden>
             {loadingNodes.map((node, index) => (
-              <i key={node} style={{ '--i': index }}>{node}</i>
+              <i key={node} style={{ '--i': index }} />
             ))}
           </div>
         </div>
@@ -275,10 +273,7 @@ function LoadingPage() {
           <b />
         </div>
         <div className="dp2-loader-bottom">
-          <small>画像同步</small>
-          <small>知识节点</small>
-          <small>资源生成</small>
-          <small>准备完成</small>
+          <small>LOADING</small>
         </div>
       </div>
     </PageShell>

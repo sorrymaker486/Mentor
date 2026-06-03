@@ -8,12 +8,12 @@
 
 /* --- Property Agent 浅色企业站：色彩与动效 --- */
 :root {
-  --pa-cream: #f6f4ef;
-  --pa-cream-deep: #ebe6dc;
+  --pa-cream: #eee8dc;
+  --pa-cream-deep: #ddd6ca;
   --pa-ink: #1a1f24;
   --pa-muted: rgba(26, 31, 36, 0.52);
-  --pa-gold: #b8955c;
-  --pa-gold-soft: rgba(184, 149, 92, 0.22);
+  --pa-gold: #a98862;
+  --pa-gold-soft: rgba(169, 136, 98, 0.14);
 }
 
 /* 单屏应用：整页不滚动（内层区域可单独滚动并隐藏滚动条） */
@@ -223,9 +223,9 @@ body {
 }
 
 .glass-header {
-  background-color: rgba(246, 244, 239, 0.78) !important;
-  backdrop-filter: blur(20px) saturate(165%) !important;
-  -webkit-backdrop-filter: blur(20px) saturate(165%) !important;
+  background-color: rgba(238, 232, 220, 0.68) !important;
+  backdrop-filter: blur(20px) saturate(112%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(112%) !important;
   border-bottom: 1px solid rgba(26, 31, 36, 0.06);
 }
 
@@ -254,8 +254,8 @@ body {
   pointer-events: none;
   z-index: -1;
   background:
-    radial-gradient(at 0% 0%, var(--pa-gold-soft) 0px, transparent 48%),
-    radial-gradient(at 100% 30%, rgba(26, 31, 36, 0.04) 0px, transparent 45%);
+    radial-gradient(at 0% 0%, rgba(169, 136, 98, 0.1) 0px, transparent 48%),
+    radial-gradient(at 100% 30%, rgba(26, 31, 36, 0.025) 0px, transparent 45%);
 }
 
 @keyframes shake {
@@ -1204,7 +1204,7 @@ body {
   position: absolute;
   inset: 0;
   z-index: 0;
-  opacity: 0.65;
+  opacity: 0.42;
   background-image:
     linear-gradient(rgba(26, 31, 36, 0.034) 1px, transparent 1px),
     linear-gradient(90deg, rgba(26, 31, 36, 0.034) 1px, transparent 1px);
@@ -1240,8 +1240,8 @@ body {
   background: linear-gradient(
     to bottom,
     transparent,
-    rgba(184, 149, 92, 0.55),
-    rgba(212, 188, 136, 0.35),
+    rgba(169, 136, 98, 0.34),
+    rgba(205, 183, 136, 0.22),
     transparent
   );
   filter: blur(0.35px);
@@ -1384,8 +1384,8 @@ body {
 }
 
 .dp2-studio {
-  height: min(46.5rem, calc(100dvh - 6.4rem)) !important;
-  min-height: min(38rem, calc(100dvh - 6.4rem)) !important;
+  height: min(52rem, calc(100dvh - 4.7rem)) !important;
+  min-height: min(42rem, calc(100dvh - 4.7rem)) !important;
 }
 
 .dp2-portrait,
@@ -1659,4 +1659,364 @@ body {
   border-radius: 0.35rem;
   background: rgba(255, 255, 255, 0.42);
   padding: 0.08rem 0.32rem;
+}
+
+/* Course board and study adapters for the live v29 surface. */
+.dp2-stage-board {
+  padding-top: clamp(4.8rem, 7.2vh, 5.8rem) !important;
+  padding-bottom: clamp(2.7rem, 5.2vh, 4.2rem) !important;
+}
+
+.dp2-stage-board .dp2-board {
+  height: min(44rem, calc(100dvh - 9rem)) !important;
+  align-items: center !important;
+}
+
+.dp2-subject {
+  grid-template-rows: auto auto auto auto !important;
+  min-height: 8.4rem !important;
+}
+
+.dp2-course-mode-row {
+  grid-column: 2;
+  grid-row: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.46rem 0.7rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.dp2-course-mode {
+  position: relative;
+  min-height: 1.85rem;
+  padding: 0.16rem 0.12rem 0.2rem;
+  color: rgba(51, 64, 63, 0.56);
+  background: transparent;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  transition:
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.dp2-course-mode::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(142, 166, 176, 0.52), rgba(180, 146, 113, 0.32), transparent);
+  transform: scaleX(0.48);
+  transform-origin: left;
+  opacity: 0.62;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.dp2-course-mode:hover,
+.dp2-course-mode:focus-visible {
+  color: rgba(51, 64, 63, 0.86);
+  transform: translateY(-0.08rem);
+}
+
+.dp2-course-mode:hover::after,
+.dp2-course-mode:focus-visible::after {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+.dp2-course-mode.is-guided {
+  color: rgba(103, 91, 73, 0.78);
+}
+
+.dp2-course-line {
+  grid-row: 4 !important;
+}
+
+.dp2-chat {
+  grid-template-rows: auto minmax(24rem, 1fr) auto !important;
+  min-height: min(42rem, calc(100dvh - 5rem)) !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+  padding-bottom: clamp(2.4rem, 6vh, 4.2rem) !important;
+}
+
+.dp2-dialogue {
+  height: 100%;
+  min-height: min(24rem, 52vh);
+  max-height: 100%;
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  padding-block: 0.65rem;
+}
+
+.dp2-dialogue::-webkit-scrollbar {
+  display: none;
+}
+
+.dp2-bubble {
+  width: min(94%, 43rem);
+  max-width: min(94%, 43rem);
+  overflow-wrap: normal;
+  word-break: normal;
+  line-break: loose;
+  white-space: normal;
+}
+
+.dp2-bubble p,
+.dp2-bubble .chat-prose {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.dp2-bubble p {
+  margin: 0.36rem 0;
+}
+
+.dp2-bubble p:first-child {
+  margin-top: 0;
+}
+
+.dp2-bubble p:last-child {
+  margin-bottom: 0;
+}
+
+.dp2-bubble ul,
+.dp2-bubble ol {
+  margin: 0.45rem 0 0.55rem;
+  padding-left: 1.25rem;
+}
+
+.dp2-bubble li {
+  margin: 0.2rem 0;
+}
+
+.dp2-bubble blockquote {
+  margin: 0.55rem 0;
+  padding-left: 0.85rem;
+  border-left: 2px solid rgba(142, 166, 176, 0.42);
+  color: rgba(51, 64, 63, 0.62);
+}
+
+.dp2-bubble pre {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: pre;
+  margin: 0.65rem 0;
+  padding: 0.85rem 0.95rem;
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px solid rgba(67, 87, 85, 0.11);
+  color: rgba(51, 64, 63, 0.82);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.dp2-bubble code:not(pre code) {
+  padding: 0.08rem 0.28rem;
+  background: rgba(255, 255, 255, 0.38);
+  color: rgba(103, 91, 73, 0.92);
+  font-size: 0.9em;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.dp2-bubble table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.7rem 0;
+}
+
+.dp2-bubble th,
+.dp2-bubble td {
+  border-bottom: 1px solid rgba(67, 87, 85, 0.12);
+  padding: 0.38rem 0.5rem;
+  text-align: left;
+}
+
+.dp2-bubble .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.1rem;
+  white-space: nowrap;
+}
+
+.dp2-bubble .katex,
+.dp2-bubble .katex-html {
+  white-space: nowrap;
+}
+
+.dp2-bubble a {
+  overflow-wrap: anywhere;
+}
+
+.dp2-dialogue {
+  display: flex !important;
+  flex-direction: column !important;
+  align-content: stretch !important;
+  min-width: 0 !important;
+}
+
+.dp2-bubble {
+  box-sizing: border-box !important;
+  min-width: 0 !important;
+  white-space: normal !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
+.dp2-bubble:not(.is-user) {
+  align-self: stretch !important;
+  justify-self: stretch !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.dp2-bubble p,
+.dp2-bubble li,
+.dp2-bubble .chat-prose {
+  white-space: normal !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
+.dp2-bubble .katex,
+.dp2-bubble .katex-html {
+  white-space: nowrap !important;
+}
+
+.dp2-bubble .katex {
+  display: inline-block !important;
+  width: auto !important;
+  max-width: 100%;
+  margin: 0 0.04em !important;
+  vertical-align: -0.06em;
+}
+
+.dp2-bubble .katex .katex-html {
+  display: inline-block !important;
+  width: auto !important;
+  max-width: 100%;
+}
+
+.dp2-bubble .katex span {
+  display: inline-block !important;
+  width: auto !important;
+  margin-bottom: 0 !important;
+}
+
+.dp2-bubble .katex .katex-mathml {
+  position: absolute !important;
+}
+
+.dp2-bubble .katex-display {
+  display: block !important;
+}
+
+.dp2-bubble.is-user {
+  margin-left: auto;
+}
+
+.dp2-path {
+  gap: 0.72rem !important;
+  padding-right: 0.1rem !important;
+}
+
+.dp2-path-chapter {
+  display: grid;
+  gap: 0.48rem;
+  animation: dp2-rise 620ms cubic-bezier(0.2, 1, 0.24, 1) both;
+}
+
+.dp2-path-chapter-head {
+  position: relative;
+  display: grid;
+  grid-template-columns: 0.92rem minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.16rem 0;
+  text-align: left;
+  color: rgba(51, 64, 63, 0.72);
+  background: transparent;
+}
+
+.dp2-path-chapter-head > span {
+  width: 0.46rem;
+  height: 0.46rem;
+  border-radius: 50%;
+  background: rgba(180, 146, 113, 0.45);
+  box-shadow: 0 0 0 0.32rem rgba(180, 146, 113, 0.08);
+}
+
+.dp2-path-chapter-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--dp2-font-display);
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: rgba(51, 64, 63, 0.82);
+}
+
+.dp2-path-chapter-head small {
+  color: rgba(51, 64, 63, 0.42);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.dp2-path-section-list {
+  display: grid;
+  gap: 0.58rem;
+  padding: 0.12rem 0 0.36rem 1.5rem;
+  background:
+    linear-gradient(180deg, rgba(67, 87, 85, 0.14), rgba(67, 87, 85, 0.04), transparent) 0.31rem 0 / 1px 100% no-repeat;
+}
+
+.dp2-path-section-list .dp2-path-item {
+  grid-template-columns: 0.8rem minmax(0, 1fr) auto;
+  gap: 0.52rem;
+  min-height: 2rem;
+  color: rgba(51, 64, 63, 0.6);
+}
+
+.dp2-path-section-list .dp2-path-item span {
+  width: 0.42rem;
+  height: 0.42rem;
+  background: rgba(142, 166, 176, 0.62);
+}
+
+.dp2-path-section-list .dp2-path-item strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.dp2-path-section-list .dp2-path-item small {
+  grid-column: 3;
+  white-space: nowrap;
+  color: rgba(51, 64, 63, 0.38);
+  font-size: 0.68rem;
+}
+
+.dp2-path-section-list .dp2-path-item.is-active strong,
+.dp2-path-section-list .dp2-path-item:hover strong {
+  color: rgba(51, 64, 63, 0.9);
 }
