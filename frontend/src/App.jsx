@@ -383,14 +383,14 @@ const v29Subjects = [
 ];
 
 const v29CourseShowcase = [
-  ['CORE TRACK', '推导密度', '先从极限进入章节小测'],
-  ['SPACE MODEL', '结构清晰', '矩阵空间正在解锁'],
-  ['DATA SENSE', '样本直觉', '随机变量可直接进入'],
-  ['MODEL LAB', '参数更新', '梯度下降保持学习中'],
-  ['GRAPH PATH', '路径搜索', '图与搜索准备接入'],
-  ['STRATEGY', '拆解训练', '动态规划等待开启'],
-  ['SYSTEM', '并发节奏', '进程同步稍后进入'],
-  ['NETWORK', '传输链路', '拥塞控制待铺开'],
+  ['START HERE', '先看图像', '从一个会动的曲线想起'],
+  ['LINE ROOM', '看见空间', '把矩阵想成一间房'],
+  ['CHANCE MAP', '追踪可能', '用样本讲一个故事'],
+  ['MODEL GARDEN', '慢慢调准', '观察模型如何靠近答案'],
+  ['PATH FINDER', '找路练习', '让节点连成一条清晰路线'],
+  ['IDEA SPLIT', '拆小问题', '把大题切成可走的小步'],
+  ['TIME TABLE', '安排顺序', '看任务如何排队和交接'],
+  ['SIGNAL FLOW', '传递消息', '理解信息怎样抵达终点'],
 ];
 
 const v29MapNodes = [
@@ -433,12 +433,12 @@ const v29MapEdges = [
 const v29PathItems = ['概念', '例题', '追问', '小测', '错因', '变式', '回顾', '总结'];
 
 const v29ResourceModes = [
-  ['course_digest', '精讲', '提炼当前小节的目标、公式与易错点。', 'warm'],
-  ['mind_map', '导图', '生成知识节点与关系结构。', 'cool'],
-  ['practice_pack', '练习', '按当前范围生成混合题型。', 'violet'],
-  ['extended_reading', '延展', '补充同主题阅读路径。', 'warm'],
-  ['code_lab', '实操', '把概念转成可运行任务。', 'cool'],
-  ['video_script', '微课', '整理成短视频讲解脚本。', 'violet'],
+  ['course_digest', '速记卡', '把这一节收成一页清爽笔记。', 'warm'],
+  ['mind_map', '关系图', '把知识点连成一张会呼吸的图。', 'cool'],
+  ['practice_pack', '练一练', '用几道题摸清自己会到哪里。', 'violet'],
+  ['extended_reading', '再看看', '给你一条继续探索的小路。', 'warm'],
+  ['code_lab', '动手做', '把想法变成一个可尝试的小任务。', 'cool'],
+  ['video_script', '讲给别人听', '整理成一段能说出口的短讲稿。', 'violet'],
 ];
 
 const V29PageShell = ({ children, variant = 'default' }) => (
@@ -529,7 +529,7 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
     const list = Object.entries(apiTypes).map(([key, value]) => ({
       key,
       title: value?.title || fallback.find((x) => x.key === key)?.title || key,
-      desc: value?.agent_chain || descByKey[key] || '按当前章节生成个性化资源。',
+      desc: value?.agent_chain || descByKey[key] || '按当前小节整理一份顺手材料。',
       tone: toneByKey[key] || 'warm',
     }));
 
@@ -548,7 +548,7 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
     setStreamText('');
 
     if (!chapterId || !sectionId) {
-      setStreamErr('请先在学习页选择小节，再生成资源。');
+      setStreamErr('先选一个小节，我才能为它准备材料。');
       return;
     }
 
@@ -588,7 +588,7 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
         throw new Error(msg || `HTTP ${r.status}`);
       }
 
-      if (!r.body) throw new Error('资源生成没有返回内容。');
+      if (!r.body) throw new Error('这次没有生成内容，请再试一次。');
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let acc = '';
@@ -603,7 +603,7 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
       acc += decoder.decode();
       setStreamText(acc);
     } catch (e) {
-      if (e?.name !== 'AbortError') setStreamErr(e?.message || '资源生成失败。');
+      if (e?.name !== 'AbortError') setStreamErr(e?.message || '材料准备失败，请稍后再试。');
     } finally {
       setStreaming(false);
     }
@@ -613,11 +613,11 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
     <V29PageShell variant="resources">
       <div className="dp2-resources">
         <section className="dp2-section-title">
-          <div className="dp2-mini-label">RESOURCE</div>
-          <h2>资源生成</h2>
-          <p>{scopeLabel ? `当前范围：${scopeLabel}` : '先回到学习页选择小节，再生成对应资源。'}</p>
+          <div className="dp2-mini-label">MATERIALS</div>
+          <h2>学习素材</h2>
+          <p>{scopeLabel ? `正在把「${scopeLabel}」整理成可带走的材料` : '先回到学习页点亮一个小节。'}</p>
           <div className="dp2-actions">
-            <V29Button quiet onClick={onBack}>返回学习</V29Button>
+              <V29Button quiet onClick={onBack}>回到学习</V29Button>
           </div>
         </section>
 
@@ -639,12 +639,12 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
           </div>
 
           <div className="dp2-resource-output">
-            <span>{streaming ? 'GENERATING' : 'PREVIEW'}</span>
-            <h3>{activeEntry?.title || '章节资源'}</h3>
+            <span>{streaming ? 'ARRANGING' : 'PREVIEW'}</span>
+            <h3>{activeEntry?.title || '小节素材'}</h3>
             {streamErr ? (
               <p>{streamErr}</p>
             ) : streamText ? (
-              <div className="dp2-resource-markdown">
+              <div className="dp2-resource-markdown dp2-answer">
                 <ReactMarkdown
                   remarkPlugins={markdownRemarkPlugins}
                   rehypePlugins={markdownRehypePlugins}
@@ -664,7 +664,7 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
               </div>
             ) : (
               <>
-                <p>{canGenerate ? '选择一种资源形态，生成当前小节的复习材料。' : '当前还没有选中小节，返回学习页选择目录后即可生成。'}</p>
+                <p>{canGenerate ? '选一种形式，我把这一节整理成更顺手的材料。' : '还没有选中小节，先回学习页点一下目录。'}</p>
                 <div className="dp2-resource-lines" aria-hidden>
                   <i />
                   <i />
@@ -675,9 +675,9 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
             )}
             <div className="dp2-actions">
               <V29Button onClick={() => void startResource()} disabled={streaming || !canGenerate}>
-                {streaming ? '生成中' : '生成'}
+                {streaming ? '整理中' : '开始整理'}
               </V29Button>
-              <V29Button quiet onClick={() => setStreamText('')} disabled={streaming || !streamText}>清空预览</V29Button>
+              <V29Button quiet onClick={() => setStreamText('')} disabled={streaming || !streamText}>清空</V29Button>
             </div>
           </div>
         </section>
@@ -972,38 +972,38 @@ const LoginView = ({ onLoginSuccess }) => {
 
   const authVisual = {
     login: {
-      eyebrow: 'RETURN',
-      title: '继续学习',
-      body: '恢复课程、画像和对话。',
-      heading: '账号入口',
-      notes: ['课程恢复', '画像同步', '会话延续'],
+      eyebrow: 'BACK',
+      title: '回到你的学习场',
+      body: '从上次停下的地方继续。',
+      heading: '进入 Mentor',
+      notes: ['保留进度', '接上对话', '继续探索'],
       primary: '登录',
       secondary: '找回密码',
     },
     register: {
-      eyebrow: 'CREATE',
-      title: '建立学习身份',
-      body: '邮箱必填，昵称唯一。',
+      eyebrow: 'NEW',
+      title: '开一条新的学习线',
+      body: '留下邮箱，之后能找回账号。',
       heading: '创建账号',
-      notes: ['邮箱绑定', '昵称校验', '密码防护'],
+      notes: ['昵称不重复', '邮箱可找回', '密码更稳妥'],
       primary: '注册',
       secondary: '返回登录',
     },
     forgot: {
-      eyebrow: 'RECOVER',
-      title: '邮箱找回',
-      body: '用注册邮箱接收重置令牌。',
+      eyebrow: 'FIND',
+      title: '找回你的入口',
+      body: '输入注册邮箱，收一枚临时令牌。',
       heading: '找回密码',
-      notes: ['只发令牌', '邮箱匹配', '过期保护'],
+      notes: ['只发令牌', '短时有效', '重新设置'],
       primary: tokenReady ? '继续重置' : '发送令牌',
       secondary: '返回登录',
     },
     'forgot-reset': {
       eyebrow: 'RESET',
-      title: '重置账号',
-      body: '输入令牌，设置新昵称和新密码。',
+      title: '换一个新起点',
+      body: '贴上令牌，再设置新昵称和新密码。',
       heading: '重置密码',
-      notes: ['令牌验证', '昵称查重', '密码更新'],
+      notes: ['令牌核对', '昵称可用', '重新进入'],
       primary: '确认重置',
       secondary: '返回找回',
     },
@@ -1841,8 +1841,8 @@ const SubjectGridV29 = ({ onSelectSubject, onLogout, username, apiBase }) => {
     <div className="pa-page dp2-live-board dp2-live-board-layout relative overflow-hidden bg-transparent text-[#1a1f24]">
       <div className="dp2-board">
         <section className="dp2-section-title">
-          <div className="dp2-mini-label">COURSES</div>
-          <h2>课程看板</h2>
+          <div className="dp2-mini-label">MAP</div>
+          <h2>学习地图</h2>
           <p>选择一条学习主线，进入对话式章节学习。课程状态会跟随你的学习记录逐步更新。</p>
           <div className="dp2-board-actions">
             <button type="button" onClick={() => setOverviewOpen(true)}>
@@ -1892,13 +1892,19 @@ const SubjectGridV29 = ({ onSelectSubject, onLogout, username, apiBase }) => {
   );
 };
 
-const SubjectGridExactV29 = ({ onSelectSubject }) => (
+const SubjectGridExactV29 = ({ onSelectSubject, onSwitchAccount, username }) => (
   <V29PageShell variant="board">
     <div className="dp2-board">
       <section className="dp2-section-title">
-        <div className="dp2-mini-label">COURSES</div>
-        <h2>课程看板</h2>
-        <p>像浏览项目一样选择课程，先看状态，再进入章节。</p>
+        <div className="dp2-mini-label">MAP</div>
+        <h2>学习地图</h2>
+        <p>先选一条主线，再决定让 AI 陪你走，还是自己随手问。</p>
+        <div className="dp2-board-actions">
+          <span>{username || 'Learning Field'}</span>
+          <button type="button" onClick={onSwitchAccount}>
+            切换账号
+          </button>
+        </div>
       </section>
       <section className="dp2-subject-list" aria-label="课程选择">
         {v29Subjects.map(([title, topic, state, progress], index) => (
@@ -1915,7 +1921,7 @@ const SubjectGridExactV29 = ({ onSelectSubject }) => (
               </span>
               <span className="dp2-course-subline">
                 <span className="dp2-course-topic">{topic} / {v29CourseShowcase[index][1]}</span>
-                <span>{state === 'active' ? '学习中' : state === 'ready' ? '可进入' : '待开启'}</span>
+                <span>{state === 'active' ? '正在探索' : state === 'ready' ? '可以进入' : '稍后再看'}</span>
                 <small>{v29CourseShowcase[index][2]}</small>
               </span>
             </span>
@@ -1942,8 +1948,8 @@ const SubjectGridExactV29 = ({ onSelectSubject }) => (
 );
 
 // --- 3. 对话界面：会话列表 + 章节目录（大章 / 小节，数据来自后端 /learning-catalog）---
-const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
-  const welcomeMessage = { role: 'assistant', content: `你好 **${username}**！欢迎来到 **${subject}** 导师课堂。` };
+const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'free' }) => {
+  const welcomeMessage = { role: 'assistant', content: `你好 **${username}**，我们从 **${subject}** 里挑一个点，慢慢把它讲亮。` };
 
   const [catalog, setCatalog] = useState([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -2669,13 +2675,29 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
   };
 
   const dedupeOverlap = (prevText, nextChunk) => {
+    if (!nextChunk) return '';
     if (!prevText) return nextChunk;
+    if (nextChunk.startsWith(prevText)) return nextChunk.slice(prevText.length);
+
+    const restartWindow = 48;
+    if (
+      prevText.length >= restartWindow &&
+      nextChunk.length >= restartWindow &&
+      nextChunk.slice(0, restartWindow) === prevText.slice(0, restartWindow)
+    ) {
+      let i = restartWindow;
+      const limit = Math.min(prevText.length, nextChunk.length);
+      while (i < limit && prevText[i] === nextChunk[i]) i += 1;
+      return nextChunk.slice(i);
+    }
+
     const maxOverlap = Math.min(prevText.length, nextChunk.length);
     for (let i = maxOverlap; i > 0; i--) {
       if (prevText.endsWith(nextChunk.slice(0, i))) {
         return nextChunk.slice(i);
       }
     }
+
     return nextChunk;
   };
 
@@ -2699,7 +2721,7 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
   };
 
   /** 打字机：每条助手消息最小间隔（毫秒），即使网络一次性返回整段也能逐字显现 */
-  const TYPING_MIN_INTERVAL_MS = 28;
+  const TYPING_MIN_INTERVAL_MS = 8;
 
   const popFirstGrapheme = (s) => {
     if (!s) return { grapheme: '', rest: '' };
@@ -2999,8 +3021,8 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
       : [
           {
             key: 'fallback',
-            title: '学习路径',
-            desc: '目录同步后会显示大章与小节。',
+            title: '学习路线',
+            desc: '路线准备好后，会按主线和小步展开。',
             fallback: true,
             sections: v29PathItems.map((item, index) => ({ key: item, title: item, fallbackIndex: index })),
           },
@@ -3024,16 +3046,16 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
     <V29PageShell variant="studio">
       <div className="dp2-studio">
         <aside className="dp2-portrait">
-          <div className="dp2-mini-label">PROFILE</div>
-          <h2>学习画像</h2>
-          <p>画像随对话与练习实时漂移。</p>
+          <div className="dp2-mini-label">TRACE</div>
+          <h2>学习星图</h2>
+          <p>每一次提问，都会让这张图多亮一点。</p>
           <V29LearningMap />
         </aside>
 
         <main className="dp2-chat">
           <div className="dp2-study-context">
             <span>{subject || 'MENTOR'}</span>
-            <strong>{scopeLabel || '选择小节后开始学习'}</strong>
+            <strong>{scopeLabel || '先选一个小节，让学习有落点'}</strong>
           </div>
 
           <div
@@ -3050,28 +3072,30 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
 
               return (
                 <article key={`${m.role}-${i}`} className={`dp2-bubble ${isUser ? 'is-user' : ''}`}>
-                  <span>{isUser ? '我' : '导师'}</span>
+                  <span>{isUser ? '我' : '陪你看'}</span>
                   {isUser ? (
                     <UserMessageBody content={m.content} />
                   ) : assistantTyping ? (
-                    <div>正在输入中...</div>
+                    <div>正在整理重点...</div>
                   ) : (
-                    <ReactMarkdown
-                      remarkPlugins={markdownRemarkPlugins}
-                      rehypePlugins={markdownRehypePlugins}
-                      components={{
-                        code({ inline, className, children }) {
-                          const match = /language-(\w+)/.exec(className || '');
-                          return !inline && match ? (
-                            <CodeBlock language={match[1]} value={String(children).replace(/\n$/, '')} />
-                          ) : (
-                            <code>{children}</code>
-                          );
-                        },
-                      }}
-                    >
-                      {normalizeMathText(m.content)}
-                    </ReactMarkdown>
+                    <div className="dp2-answer">
+                      <ReactMarkdown
+                        remarkPlugins={markdownRemarkPlugins}
+                        rehypePlugins={markdownRehypePlugins}
+                        components={{
+                          code({ inline, className, children }) {
+                            const match = /language-(\w+)/.exec(className || '');
+                            return !inline && match ? (
+                              <CodeBlock language={match[1]} value={String(children).replace(/\n$/, '')} />
+                            ) : (
+                              <code>{children}</code>
+                            );
+                          },
+                        }}
+                      >
+                        {normalizeMathText(m.content)}
+                      </ReactMarkdown>
+                    </div>
                   )}
                 </article>
               );
@@ -3087,8 +3111,8 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleSend();
               }}
-              placeholder={learnMode ? `回答当前小节：${scopeLabel || ''}` : '自由提问，不限定章节'}
-              aria-label="输入你的问题"
+              placeholder={learnMode ? `写下你的想法：${scopeLabel || ''}` : '从一句话开始问'}
+              aria-label="写下你的问题"
             />
             <V29Button onClick={() => handleSend()} disabled={isLoading}>发送</V29Button>
           </div>
@@ -3096,36 +3120,37 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
 
         <aside className="dp2-study-rail">
           <section className="dp2-plan">
-            <div className="dp2-mini-label">PLAN</div>
-            <h3>当前阶段</h3>
+            <div className="dp2-mini-label">NOW</div>
+            <h3>这一刻看什么</h3>
             <p>
               {learnMode
                 ? scopeLabel
-                  ? `AI 带学：${scopeLabel}`
-                  : '先选择小节，再进入 AI 带学。'
-                : '自由提问：不限定章节。'}
+                  ? `正在看：${scopeLabel}`
+                  : '先挑一个小节，我把它拆成几步。'
+                : '自由问：想到哪里，就从哪里开口。'}
             </p>
             <ol>
-              <li>观察当前知识节点</li>
-              <li>完成对话带学</li>
-              <li>进入章节小测</li>
+              <li>先抓住最亮的点</li>
+              <li>再换个画面理解</li>
+              <li>最后用小练习确认</li>
             </ol>
           </section>
 
           <div className="dp2-rail-actions">
             <V29Button quiet onClick={() => void prepareSmallQuiz()} disabled={isLoading || !canPrepareSmallQuiz}>
-              章节小测
+              试一试
             </V29Button>
             <V29Button quiet onClick={() => setStudioPanel('resources')}>
-              资源生成
+              学习素材
             </V29Button>
-            <V29Button quiet onClick={onBack}>返回看板</V29Button>
+            <V29Button quiet onClick={onBack}>回到地图</V29Button>
+            <V29Button quiet onClick={onSwitchAccount}>换账号</V29Button>
           </div>
 
           <section className="dp2-path">
             <div className="dp2-mini-label">目录</div>
-            {catalogLoading && <div className="dp2-path-item"><span /><strong>加载目录</strong><small>同步中</small></div>}
-            {!catalogLoading && catalogErr && <div className="dp2-path-item"><span /><strong>目录加载失败</strong><small>{catalogErr}</small></div>}
+            {catalogLoading && <div className="dp2-path-item"><span /><strong>铺开路线</strong><small>准备中</small></div>}
+            {!catalogLoading && catalogErr && <div className="dp2-path-item"><span /><strong>路线没铺好</strong><small>{catalogErr}</small></div>}
             {!catalogLoading &&
               !catalogErr &&
               v29PathChapters.map((chapter, chapterIndex) => {
@@ -3143,7 +3168,7 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
                     >
                       <span />
                       <strong>{chapter.title}</strong>
-                      <small>{chapter.sections.length ? `${passedCount}/${chapter.sections.length}` : '同步中'}</small>
+                      <small>{chapter.sections.length ? `${passedCount}/${chapter.sections.length}` : '准备中'}</small>
                     </button>
                     {open && (
                       <div className="dp2-path-section-list">
@@ -3152,15 +3177,15 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
                           const status =
                             item.fallbackIndex != null
                               ? item.fallbackIndex < 2
-                                ? '已完成'
+                                ? '已点亮'
                                 : item.fallbackIndex === 2
-                                  ? '进行中'
-                                  : '待开启'
+                                  ? '正在看'
+                                  : '待点亮'
                               : progress.sections?.[item.key]?.small_quiz_passed
-                                ? '已完成'
+                                ? '已点亮'
                                 : active
-                                  ? '进行中'
-                                  : '待开启';
+                                  ? '正在看'
+                                  : '待点亮';
                           return (
                             <button
                               key={item.key}
@@ -3197,13 +3222,13 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
           {!quizResult ? (
             <div className="dp2-quiz">
               <section className="dp2-section-title">
-                <div className="dp2-mini-label">TEST</div>
-                <h2>{quizModal.type === 'small' ? '章节小测' : '章节测试'}</h2>
-                <p>完成后留在当前窗口查看结果、答案和解析。右侧题号可直接跳转。</p>
+                <div className="dp2-mini-label">CHECK</div>
+                <h2>{quizModal.type === 'small' ? '小节练习' : '整章回看'}</h2>
+                <p>做完就看回放：哪里亮了，哪里还要补。右侧题号可以跳转。</p>
               </section>
               <section className="dp2-quiz-board">
                 <article className="dp2-quiz-focus">
-                  <span>{`当前题目 ${quizIndex + 1} / ${quizQuestions.length}`}</span>
+                  <span>{`第 ${quizIndex + 1} 题 / 共 ${quizQuestions.length} 题`}</span>
                   <h3>{currentQuizQuestion?.question}</h3>
                   <div className="dp2-options">
                     {(currentQuizQuestion?.options || []).map((option, index) => (
@@ -3240,7 +3265,7 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
                           else submitChapterQuiz(quizModal.chapterId, quizPicks);
                         }}
                       >
-                        提交答案
+                        看结果
                       </V29Button>
                     )}
                   </footer>
@@ -3269,8 +3294,8 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
             <div className="dp2-result">
               <section className="dp2-result-hero">
                 <div className="dp2-mini-label">REVIEW</div>
-                <h2>结果解析</h2>
-                <p>{quizResult.passed ? '已通过本次测验。' : '未达标时自动衔接 AI 巩固学习。'}</p>
+                <h2>回看结果</h2>
+                <p>{quizResult.passed ? '这一轮已经过关，可以继续往前。' : '还差一点，我会带你把薄弱处补上。'}</p>
                 <div className="dp2-result-orbit" aria-hidden>
                   <span>{quizResult.passed ? '已掌握' : '需巩固'}</span>
                 </div>
@@ -3284,21 +3309,21 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
                 <div className="dp2-result-list">
                   {(quizResult.items || []).slice(0, 3).map((item, index) => (
                     <article key={index} className={`dp2-result-card ${item.is_correct ? 'is-ok' : 'is-miss'}`}>
-                      <span>{item.is_correct ? '掌握' : '回补'}</span>
+                      <span>{item.is_correct ? '点亮' : '补光'}</span>
                       <p>{item.explanation || item.question}</p>
                     </article>
                   ))}
                 </div>
                 <aside className="dp2-ai-queue">
                   <span>NEXT</span>
-                  <h3>AI 巩固路径</h3>
+                  <h3>下一步怎么补</h3>
                   <ol>
-                    <li>回看薄弱知识点</li>
-                    <li>补做变式题</li>
-                    <li>重新生成章节小测</li>
+                    <li>先回看最容易卡住的地方</li>
+                    <li>再做一题相近的小练习</li>
+                    <li>最后重新试一轮回看</li>
                   </ol>
                   <div className="dp2-actions">
-                    <V29Button onClick={() => setQuizModal(null)}>继续学习</V29Button>
+                    <V29Button onClick={() => setQuizModal(null)}>继续往前</V29Button>
                   </div>
                 </aside>
               </section>
@@ -3499,7 +3524,7 @@ const ChatView = ({ subject, username, onBack, initialMode = 'free' }) => {
                         <span className="font-medium tracking-wide">正在输入中…</span>
                       </div>
                     ) : (
-                      <div className="prose prose-sm max-w-none prose-neutral">
+                      <div className="dp2-answer prose prose-sm max-w-none prose-neutral">
                         <ReactMarkdown
                           remarkPlugins={markdownRemarkPlugins}
                           rehypePlugins={markdownRehypePlugins}
@@ -3984,6 +4009,14 @@ export default function App() {
     liveRootRef.current.style.setProperty('--my', `${y}%`);
   };
 
+  const handleSwitchAccount = () => {
+    localStorage.removeItem('currentUser');
+    setCurrentUser('');
+    setSelectedSubject(null);
+    setSelectedStudyMode('free');
+    setAppStep('login');
+  };
+
   if (isDesignPreview) {
     return <DesignPreview />;
   }
@@ -4028,13 +4061,7 @@ export default function App() {
             setSelectedStudyMode(mode === 'guided' ? 'guided' : 'free');
             setAppStep('chat');
           }}
-          onLogout={() => {
-            localStorage.removeItem('currentUser');
-            setCurrentUser('');
-            setSelectedSubject(null);
-            setSelectedStudyMode('free');
-            setAppStep('login');
-          }}
+          onSwitchAccount={handleSwitchAccount}
         />
       )}
 
@@ -4044,6 +4071,7 @@ export default function App() {
           username={currentUser}
           initialMode={selectedStudyMode}
           onBack={() => setAppStep('subjects')}
+          onSwitchAccount={handleSwitchAccount}
         />
       )}
     </main>

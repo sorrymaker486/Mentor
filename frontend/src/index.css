@@ -1672,6 +1672,76 @@ body {
   align-items: center !important;
 }
 
+.dp2-board > .dp2-section-title {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.dp2-board > .dp2-subject-list {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.dp2-board-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: clamp(0.9rem, 2.2vw, 1.45rem);
+  margin-top: clamp(1rem, 2.2vh, 1.55rem);
+  color: rgba(51, 64, 63, 0.44);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.dp2-board-actions span {
+  max-width: min(13rem, 38vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dp2-board-actions button {
+  position: relative;
+  padding: 0.18rem 0;
+  border: 0;
+  background: transparent;
+  color: rgba(103, 91, 73, 0.72);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.dp2-board-actions button::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -0.2rem;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(103, 128, 130, 0.55), rgba(180, 146, 113, 0.36), transparent);
+  transform: scaleX(0.58);
+  transform-origin: left;
+  opacity: 0.58;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.dp2-board-actions button:hover,
+.dp2-board-actions button:focus-visible {
+  color: rgba(51, 64, 63, 0.86);
+  transform: translateY(-0.08rem);
+}
+
+.dp2-board-actions button:hover::after,
+.dp2-board-actions button:focus-visible::after {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
 .dp2-subject {
   grid-template-rows: auto auto auto auto !important;
   min-height: 8.4rem !important;
@@ -1789,6 +1859,101 @@ body {
   margin-bottom: 0;
 }
 
+.dp2-answer {
+  display: grid;
+  gap: 0.66rem;
+  color: rgba(51, 64, 63, 0.78);
+  font-size: 0.98rem;
+  line-height: 1.82;
+}
+
+.dp2-answer > * {
+  min-width: 0;
+}
+
+.dp2-answer h1,
+.dp2-answer h2,
+.dp2-answer h3 {
+  position: relative;
+  margin: 0.85rem 0 0.18rem;
+  color: rgba(51, 64, 63, 0.92);
+  font-family: var(--dp2-font-display);
+  font-weight: 560;
+  line-height: 1.18;
+  letter-spacing: 0;
+}
+
+.dp2-answer h1:first-child,
+.dp2-answer h2:first-child,
+.dp2-answer h3:first-child {
+  margin-top: 0;
+}
+
+.dp2-answer h1 {
+  font-size: clamp(1.42rem, 1.9vw, 1.9rem);
+}
+
+.dp2-answer h2 {
+  font-size: clamp(1.12rem, 1.35vw, 1.42rem);
+}
+
+.dp2-answer h3 {
+  font-size: clamp(1rem, 1.05vw, 1.16rem);
+}
+
+.dp2-answer h2::after,
+.dp2-answer h3::after {
+  content: "";
+  display: block;
+  width: min(9.5rem, 42%);
+  height: 1px;
+  margin-top: 0.42rem;
+  background: linear-gradient(90deg, rgba(103, 128, 130, 0.44), rgba(180, 146, 113, 0.28), transparent);
+}
+
+.dp2-answer strong {
+  color: rgba(48, 61, 60, 0.92);
+  font-weight: 740;
+}
+
+.dp2-answer em {
+  color: rgba(103, 91, 73, 0.82);
+  font-style: normal;
+}
+
+.dp2-answer ul,
+.dp2-answer ol {
+  display: grid;
+  gap: 0.36rem;
+  margin: 0.16rem 0 0.44rem;
+  padding-left: 1.05rem;
+}
+
+.dp2-answer li {
+  padding-left: 0.1rem;
+}
+
+.dp2-answer li::marker {
+  color: rgba(103, 128, 130, 0.76);
+  font-weight: 800;
+}
+
+.dp2-answer blockquote {
+  margin: 0.4rem 0;
+  padding: 0.72rem 0 0.72rem 1rem;
+  border-left: 2px solid rgba(103, 128, 130, 0.38);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.32), transparent 76%);
+  color: rgba(51, 64, 63, 0.68);
+}
+
+.dp2-answer hr {
+  width: min(14rem, 52%);
+  height: 1px;
+  margin: 0.72rem 0;
+  border: 0;
+  background: linear-gradient(90deg, transparent, rgba(103, 128, 130, 0.4), rgba(180, 146, 113, 0.28), transparent);
+}
+
 .dp2-bubble ul,
 .dp2-bubble ol {
   margin: 0.45rem 0 0.55rem;
@@ -1860,6 +2025,45 @@ body {
 
 .dp2-bubble a {
   overflow-wrap: anywhere;
+}
+
+.dp2-bubble .dp2-answer {
+  display: grid;
+  gap: 0.66rem;
+}
+
+.dp2-bubble .dp2-answer p {
+  margin: 0;
+}
+
+.dp2-bubble .dp2-answer h1,
+.dp2-bubble .dp2-answer h2,
+.dp2-bubble .dp2-answer h3 {
+  margin: 0.85rem 0 0.18rem;
+}
+
+.dp2-bubble .dp2-answer h1:first-child,
+.dp2-bubble .dp2-answer h2:first-child,
+.dp2-bubble .dp2-answer h3:first-child {
+  margin-top: 0;
+}
+
+.dp2-bubble .dp2-answer ul,
+.dp2-bubble .dp2-answer ol {
+  margin: 0.16rem 0 0.44rem;
+  padding-left: 1.1rem;
+}
+
+.dp2-bubble .dp2-answer li {
+  margin: 0;
+}
+
+.dp2-bubble .dp2-answer blockquote {
+  margin: 0.4rem 0;
+  padding: 0.72rem 0 0.72rem 1rem;
+  border-left: 2px solid rgba(103, 128, 130, 0.38);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.32), transparent 76%);
+  color: rgba(51, 64, 63, 0.68);
 }
 
 .dp2-dialogue {

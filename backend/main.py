@@ -1455,10 +1455,14 @@ def _strip_learn_meta_trailer(text: str) -> str:
 
 def _learn_opening_system(subject: str, scope_label: str, ref_excerpt: str) -> str:
     return (
-        f"你是资深「{subject}」教师，当前小节：{scope_label}。\n"
-        "请按**正规课堂教学**组织第一轮内容（用 Markdown），结构包含：\n"
-        "1）**学习目标**（1-3 条，可量化）；2）**核心要点讲解**（分点、小标题，讲清概念与直觉）；"
-        "3）**简单示例或类比**（如适用）；4）**课堂互动**：1-2 个引导性问题或小练习，请学员思考。\n"
+        f"你是「{subject}」学习伙伴，当前小节：{scope_label}。\n"
+        "请用清爽、有重点的 Markdown 组织第一轮内容。不要堆专业术语；必须出现术语时，立刻用一句人话解释。\n"
+        "固定结构如下，标题必须保留；第一行必须是 `## 先抓重点`，不要在标题前写“好的/我们来看/下面是”等开场句：\n"
+        "## 先抓重点\n用 2-4 条短句说清这节最重要的东西，每条只讲一个意思。\n"
+        "## 换个说法\n用生活化比喻或画面感解释核心想法，不要写成教材摘要。\n"
+        "## 小例子\n给一个小例子、反例或一步步的小推演，让学习者看见它怎么用。\n"
+        "## 你来试试\n给 1 个轻量问题或小练习，引导学习者继续回答。\n"
+        "排版要求：段落不要过长；不要把单个字母、公式符号单独拆成一行；列表最多 5 条；重点词可以加粗，但不要满屏加粗。\n"
         "数学公式请用 LaTeX：行内 `$...$`，独立公式 `$$...$$`；代码用 Markdown 围栏代码块（带语言标签）。\n"
         "严格只依据【资料】，不要编造资料中不存在的定理编号；不要输出与教学无关的寒暄套话。\n"
         f"【资料】\n{ref_excerpt[:11000]}\n\n"
@@ -1469,10 +1473,14 @@ def _learn_opening_system(subject: str, scope_label: str, ref_excerpt: str) -> s
 
 def _learn_teaching_system(subject: str, scope_label: str, ref_excerpt: str) -> str:
     return (
-        f"你是资深「{subject}」教师，当前小节：{scope_label}。\n"
-        "请按**正规课堂教学节奏**组织本轮讲解（Markdown），并与**上文对话自然衔接**：\n"
-        "1）**回顾/承上启下**（若有上文）；2）**要点展开**：结合学员上一句作答，先**简短点评**（肯定或纠错），再讲清相关概念；\n"
-        "3）**例题、反例或易错点**（如适用）；4）**互动**：提出 1-2 个启发式问题或微型练习，引导学员继续思考。\n"
+        f"你是「{subject}」学习伙伴，当前小节：{scope_label}。\n"
+        "请用清爽、有重点的 Markdown 组织本轮讲解，并自然接住学习者上一句回答。不要堆专业术语；必须出现术语时，立刻用一句人话解释。\n"
+        "固定结构如下，标题必须保留；第一行必须是 `## 先接住你的想法`，不要在标题前写“好的/我们来看/下面是”等开场句：\n"
+        "## 先接住你的想法\n先用 1-2 句话点评学习者刚才的回答：哪里对、哪里需要轻轻修正。\n"
+        "## 先抓重点\n用 2-4 条短句讲清本轮最重要的东西，每条只讲一个意思。\n"
+        "## 小例子\n给一个小例子、反例或一步步的小推演，让学习者看见它怎么用。\n"
+        "## 你来试试\n给 1 个轻量问题或小练习，引导学习者继续回答。\n"
+        "排版要求：段落不要过长；不要把单个字母、公式符号单独拆成一行；列表最多 5 条；重点词可以加粗，但不要满屏加粗。\n"
         "若学员回答明显偏离本节，先温和纠偏再回到本节主线。\n"
         "公式：行内 `$...$`，独立 `$$...$$`；代码用 ```语言 围栏；可用少量 Unicode 符号（如 ⇒、∴）辅助表达。\n"
         "严格只依据【资料】；不要编造资料中不存在的结论。\n"
@@ -1924,6 +1932,19 @@ def collapse_repetition(text: str) -> str:
         text = new_text
     return clean_model_math_artifacts(text).strip()
 
+ANSWER_START_HEADINGS = ("## 先抓重点", "## 先接住你的想法")
+
+
+def strip_intro_before_answer_heading(text: str, *, wait_for_heading: bool = False) -> str:
+    """Keep fixed-format learning answers starting at their first required heading."""
+    if not text:
+        return text
+    positions = [text.find(h) for h in ANSWER_START_HEADINGS if text.find(h) >= 0]
+    if positions:
+        return text[min(positions):].lstrip()
+    return "" if wait_for_heading else text
+
+
 def safe_stream_delta(prev_clean: str, new_clean: str) -> str:
     if not prev_clean:
         return new_clean
@@ -1933,7 +1954,11 @@ def safe_stream_delta(prev_clean: str, new_clean: str) -> str:
     for i in range(max_overlap, 0, -1):
         if prev_clean[-i:] == new_clean[:i]:
             return new_clean[i:]
-    return new_clean
+    # Streaming cannot retract text already sent to the browser. If cleanup changed
+    # earlier content, sending the full cleaned string again duplicates the answer.
+    if len(new_clean) <= len(prev_clean):
+        return ""
+    return new_clean[len(prev_clean):]
 
 def make_session_title(text: str) -> str:
     title = text.strip().replace("\n", " ")
@@ -2428,6 +2453,8 @@ def learning_studio_resource_stream(body: StudioResourceStreamBody, db: Session 
     user_lines = [
         f"课程：{body.subject}；大章/小节：{scope_label}。",
         "请严格只输出本任务要求的格式（Markdown / Mermaid / JSON 代码块等），勿输出与任务无关的寒暄。",
+        "整体表达要少术语、重点清楚、有画面感；必须出现术语时，立刻用一句人话解释。",
+        "排版要规整：标题短、段落短、列表不超过 5 条；不要把单个字母或公式符号单独拆成一行。",
     ]
     if hint:
         user_lines.append(f"学员/教师的额外要求：\n{hint}")
@@ -2609,12 +2636,20 @@ def learning_start_section(body: LearningStartBody, db: Session = Depends(get_db
             if chunk.choices and chunk.choices[0].delta.content:
                 delta = chunk.choices[0].delta.content
                 raw_answer += delta
-                new_clean = collapse_repetition(raw_answer)
+                new_clean = strip_intro_before_answer_heading(
+                    collapse_repetition(raw_answer),
+                    wait_for_heading=True,
+                )
                 emit = safe_stream_delta(clean_answer, new_clean)
                 if emit:
                     yield emit
                 clean_answer = new_clean
 
+        if not clean_answer:
+            clean_answer = strip_intro_before_answer_heading(
+                collapse_repetition(raw_answer),
+                wait_for_heading=False,
+            )
         assistant_plain = _strip_learn_meta_trailer(clean_answer).strip()
         if not assistant_plain:
             assistant_plain = "（本节讲解暂时为空，请稍后重试。）"
@@ -2712,12 +2747,20 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
             if chunk.choices and chunk.choices[0].delta.content:
                 delta = chunk.choices[0].delta.content
                 raw_answer += delta
-                new_clean = collapse_repetition(raw_answer)
+                new_clean = strip_intro_before_answer_heading(
+                    collapse_repetition(raw_answer),
+                    wait_for_heading=True,
+                )
                 emit = safe_stream_delta(clean_answer, new_clean)
                 if emit:
                     yield emit
                 clean_answer = new_clean
 
+        if not clean_answer:
+            clean_answer = strip_intro_before_answer_heading(
+                collapse_repetition(raw_answer),
+                wait_for_heading=False,
+            )
         teaching_md = _strip_learn_meta_trailer(clean_answer).strip()
         if not teaching_md:
             teaching_md = "已收到你的回答。我们结合资料再梳理一下要点。"
@@ -3313,7 +3356,7 @@ def _execute_ask_stream(
         .all()
     )
 
-    ref_for_prompt = ref_block.strip() or "（暂无小节级参考资料：请根据章节名称做保守、教材化的解释，并明确标注推理假设。）"
+    ref_for_prompt = ref_block.strip() or "（这一节暂时没有更细的资料。请围绕章节名称，用易懂、简短、可想象的方式说明；不要写成教材摘要。）"
     vision_note = ""
     if images or any(
         (h.role == "user" and (h.content or "").startswith(ASK_USER_JSON_PREFIX)) for h in db_messages
@@ -3322,12 +3365,20 @@ def _execute_ask_stream(
             "\n若学员附带图片：请结合图片、文字与参考资料作答；若图片与当前课程无关或无法辨认，请如实说明。"
         )
     system_prompt = (
-        f"你是专业的「{subject}」课程导师。\n"
-        f"【当前学习范围】{chapter_text}\n"
-        "你必须严格只依据下方「本小节参考资料」展开讲解、推导与举例；不得把其它章节或小节当作已给出的事实来引用，除非在参考资料中出现。\n"
-        "若学员问题明显超出当前范围：先简要说明超出点，再建议其切换到对应大章/小节。"
+        f"你是「{subject}」学习伙伴，正在陪用户看：{chapter_text}。\n"
+        "你要像一个会把复杂事讲清楚的同伴：少术语、重点清楚、有画面感。必须出现术语时，马上用一句人话解释。\n"
+        "禁止写任何开场句或免责声明；不要用“好的/我们来看/下面是/根据你提供的资料为空/我将保守说明/教材化解释”开头。资料少时，直接给出最基础、最可靠的理解。\n"
+        "必须使用下面的 Markdown 结构，并保留这四个标题：\n"
+        "第一行必须是 `## 先抓重点`。\n"
+        "## 先抓重点\n用 2-4 条短句回答问题，每条只讲一个意思；第一句直接回答用户的问题。\n"
+        "## 换个说法\n用一个生活画面、故事或比喻解释核心想法，不要写成教材摘要。\n"
+        "## 小例子\n给一个小例子、反例或一步步的小推演，让用户看见它怎么用；例子必须算对，不确定时就换成更简单的例子。\n"
+        "## 继续往前\n给一个可以马上尝试的问题、练习或下一步提醒。\n"
+        "排版要求：段落要短；不要把单个字母、公式符号单独拆成一行；列表最多 4 条；重点词可以加粗，但不要满屏加粗。\n"
+        "依据下方「这一节可参考的内容」展开；如果内容不足，可以用该章节最基础的常识补足，但要保持简短，不要引入远离当前章节的大段内容。\n"
+        "若学员问题明显超出当前范围：先用一句话点明，再给一个可以回到当前范围的小入口。"
         f"{vision_note}\n\n"
-        f"【本小节参考资料】\n{ref_for_prompt}"
+        f"【这一节可参考的内容】\n{ref_for_prompt}"
         + ANTI_HALLUCINATION_SYSTEM_SUFFIX
     )
     messages: List[Any] = [{"role": "system", "content": system_prompt}]
@@ -3352,11 +3403,20 @@ def _execute_ask_stream(
             if chunk.choices and chunk.choices[0].delta.content:
                 delta = chunk.choices[0].delta.content
                 raw_answer += delta
-                new_clean = collapse_repetition(raw_answer)
+                new_clean = strip_intro_before_answer_heading(
+                    collapse_repetition(raw_answer),
+                    wait_for_heading=True,
+                )
                 emit = safe_stream_delta(clean_answer, new_clean)
                 if emit:
                     yield emit
                 clean_answer = new_clean
+
+        if not clean_answer:
+            clean_answer = strip_intro_before_answer_heading(
+                collapse_repetition(raw_answer),
+                wait_for_heading=False,
+            )
 
         with SessionLocal() as save_db:
             save_db.add(ChatHistoryDB(session_id=sid_for_stream, role="assistant", content=clean_answer))

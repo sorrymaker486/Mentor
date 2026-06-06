@@ -184,7 +184,7 @@ export default function IntroLoader({ onComplete }) {
 
         <div className={styles.loaderMid}>
           <div className={styles.loaderCopy}>
-            <strong>同步中</strong>
+            <strong>整理学习场</strong>
           </div>
           <div className={styles.loaderNodes} aria-hidden>
             {Array.from({ length: 5 }).map((_, index) => (
