@@ -53,7 +53,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from passlib.context import CryptContext
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import create_engine, ForeignKey, DateTime, String, inspect, text, Text, UniqueConstraint, Float, Integer, Boolean, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import (
@@ -1739,8 +1739,18 @@ async def api_root():
     }
 
 
+USERNAME_MIN_LENGTH = 2
+USERNAME_MAX_LENGTH = 16
+USERNAME_PATTERN = r"^[A-Za-z0-9_㐀-䶿一-鿿]+$"
+
+
 class UserLogin(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(
+        ...,
+        min_length=USERNAME_MIN_LENGTH,
+        max_length=USERNAME_MAX_LENGTH,
+        pattern=USERNAME_PATTERN,
+    )
     password: str = Field(..., min_length=1, max_length=128)
 
     @field_validator("username", mode="before")
@@ -1765,8 +1775,14 @@ _EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
 
 class UserRegister(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(
+        ...,
+        min_length=USERNAME_MIN_LENGTH,
+        max_length=USERNAME_MAX_LENGTH,
+        pattern=USERNAME_PATTERN,
+    )
     password: str = Field(..., min_length=6, max_length=20)
+    confirm_password: str = Field(..., min_length=6, max_length=20)
     email: str = Field(..., min_length=5, max_length=255)
 
     @field_validator("username", mode="before")
@@ -1782,10 +1798,16 @@ class UserRegister(BaseModel):
             raise ValueError("邮箱格式不正确")
         return s
 
-    @field_validator("password")
+    @field_validator("password", "confirm_password")
     @classmethod
     def password_policy(cls, v: str) -> str:
         return assert_password_strength(v)
+
+    @model_validator(mode="after")
+    def matching_passwords(self):
+        if self.password != self.confirm_password:
+            raise ValueError("两次输入的密码不一致")
+        return self
 
 
 class ForgotPasswordBody(BaseModel):
@@ -1801,7 +1823,12 @@ class ForgotPasswordBody(BaseModel):
 
 
 class ResetPasswordBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(
+        ...,
+        min_length=USERNAME_MIN_LENGTH,
+        max_length=USERNAME_MAX_LENGTH,
+        pattern=USERNAME_PATTERN,
+    )
     reset_token: str = Field(..., min_length=16, max_length=128)
     password: str = Field(..., min_length=6, max_length=20)
 
@@ -1817,7 +1844,7 @@ class ResetPasswordBody(BaseModel):
 
 
 class LearningStartBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
     subject: str = Field(..., min_length=1, max_length=64)
     chapter_id: str = Field(..., min_length=1, max_length=64)
     section_id: str = Field(..., min_length=1, max_length=64)
@@ -1840,7 +1867,7 @@ class AskImagePart(BaseModel):
 
 
 class AskPostBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
     subject: str = Field(..., min_length=1, max_length=64)
     question: str = Field(default="", max_length=8000)
     chapter: Optional[str] = None
@@ -1851,7 +1878,7 @@ class AskPostBody(BaseModel):
 
 
 class LearningAnswerBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
     subject: str = Field(..., min_length=1, max_length=64)
     chapter_id: str = Field(..., min_length=1, max_length=64)
     section_id: str = Field(..., min_length=1, max_length=64)
@@ -1861,13 +1888,13 @@ class LearningAnswerBody(BaseModel):
 
 
 class StudioPortraitRefreshBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
     subject: str = Field(..., min_length=1, max_length=64)
     session_id: Optional[int] = None
 
 
 class StudioResourceStreamBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
     subject: str = Field(..., min_length=1, max_length=64)
     chapter_id: str = Field(..., min_length=1, max_length=64)
     section_id: str = Field(..., min_length=1, max_length=64)
@@ -1876,7 +1903,7 @@ class StudioResourceStreamBody(BaseModel):
 
 
 class SmallQuizSubmitBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
     subject: str = Field(..., min_length=1, max_length=64)
     chapter_id: str = Field(..., min_length=1, max_length=64)
     section_id: str = Field(..., min_length=1, max_length=64)
@@ -1884,7 +1911,7 @@ class SmallQuizSubmitBody(BaseModel):
 
 
 class SmallQuizPrepareBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
     subject: str = Field(..., min_length=1, max_length=64)
     chapter_id: str = Field(..., min_length=1, max_length=64)
     section_id: str = Field(..., min_length=1, max_length=64)
@@ -1892,13 +1919,13 @@ class SmallQuizPrepareBody(BaseModel):
 
 
 class ChapterQuizPrepareBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
     subject: str = Field(..., min_length=1, max_length=64)
     chapter_id: str = Field(..., min_length=1, max_length=64)
 
 
 class ChapterQuizSubmitBody(BaseModel):
-    username: str = Field(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
     subject: str = Field(..., min_length=1, max_length=64)
     chapter_id: str = Field(..., min_length=1, max_length=64)
     answers: List[int] = Field(..., min_length=1, max_length=24)
@@ -2546,7 +2573,12 @@ async def get_history(session_id: int, db: Session = Depends(get_db)):
 @app.delete("/chat-sessions/{session_id}")
 def delete_chat_session(
     session_id: int,
-    username: str = Query(..., min_length=3, max_length=16, pattern=r"^[a-zA-Z0-9_]+$"),
+    username: str = Query(
+        ...,
+        min_length=USERNAME_MIN_LENGTH,
+        max_length=USERNAME_MAX_LENGTH,
+        pattern=USERNAME_PATTERN,
+    ),
     db: Session = Depends(get_db),
 ):
     """删除指定会话及其全部聊天记录（须为会话所属用户）。"""

@@ -19,10 +19,10 @@
   height: 100dvh;
   overflow: hidden;
   color: var(--ink);
-  cursor: none;
+  cursor: auto;
   font-family: var(--dp2-font-ui);
   background:
-    radial-gradient(circle at var(--mx, 50%) var(--my, 50%), rgba(130, 155, 163, 0.022), transparent 5.8rem),
+    radial-gradient(circle at 54% 46%, rgba(130, 155, 163, 0.022), transparent 5.8rem),
     radial-gradient(circle at 14% 20%, rgba(169, 136, 98, 0.08), transparent 28rem),
     radial-gradient(circle at 84% 22%, rgba(151, 143, 158, 0.09), transparent 30rem),
     radial-gradient(circle at 48% 94%, rgba(139, 151, 134, 0.1), transparent 30rem),
@@ -42,7 +42,7 @@
 
 .dp2-root button {
   border: 0;
-  cursor: none;
+  cursor: pointer;
 }
 
 .dp2-header {
@@ -336,16 +336,7 @@
 }
 
 .dp2-cursor-trace {
-  position: fixed;
-  left: var(--cursor-x, 50vw);
-  top: var(--cursor-y, 50vh);
-  z-index: 80;
-  width: 0.68rem;
-  height: 0.68rem;
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-  transition: none;
-  will-change: left, top;
+  display: none;
 }
 
 .dp2-cursor-trace::before,
@@ -397,6 +388,37 @@
   border-radius: 50%;
   background: rgba(67, 87, 85, 0.42);
   box-shadow: none;
+}
+
+.dp2-click-ripples {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.dp2-click-ripple {
+  position: absolute;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 1px solid rgba(104, 135, 143, 0.52);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.32), rgba(130, 155, 163, 0.1) 36%, transparent 68%);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.22),
+    0 0 1.15rem rgba(130, 155, 163, 0.18);
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.35);
+  animation: dp2-click-ripple 720ms cubic-bezier(0.16, 0.72, 0.24, 1) forwards;
+}
+
+.dp2-click-ripple::after {
+  content: "";
+  position: absolute;
+  inset: -0.42rem;
+  border: 1px solid rgba(169, 136, 98, 0.2);
+  border-radius: inherit;
 }
 
 .dp2-page-wipe {
@@ -856,7 +878,7 @@
   animation: dp2-rise 620ms cubic-bezier(0.2, 1, 0.24, 1) both;
 }
 
-.dp2-field span {
+.dp2-field > label {
   color: rgba(51, 64, 63, 0.54);
   font-size: 0.76rem;
   font-weight: 900;
@@ -883,6 +905,88 @@
   background:
     linear-gradient(90deg, var(--clay), var(--blue), transparent) 0 100% / 100% 2px no-repeat,
     transparent;
+}
+
+.dp2-password-control {
+  position: relative;
+  width: 100%;
+}
+
+.dp2-password-control input {
+  padding-right: 3rem;
+}
+
+.dp2-password-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 2.75rem;
+  height: 2.82rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  color: rgba(51, 64, 63, 0.42);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.dp2-password-toggle:hover,
+.dp2-password-toggle:focus-visible,
+.dp2-password-toggle.is-visible {
+  color: rgba(51, 64, 63, 0.78);
+}
+
+.dp2-password-toggle:focus-visible {
+  outline: 1px solid rgba(142, 166, 176, 0.66);
+  outline-offset: -0.34rem;
+}
+
+.dp2-password-toggle:active {
+  transform: scale(0.92);
+}
+
+.dp2-password-eye {
+  position: relative;
+  width: 1.08rem;
+  height: 0.72rem;
+  display: block;
+  border: 1.4px solid currentColor;
+  border-radius: 70% 18%;
+  transform: rotate(45deg);
+}
+
+.dp2-password-eye::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0.28rem;
+  height: 0.28rem;
+  border-radius: 50%;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+}
+
+.dp2-password-eye::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1.45rem;
+  height: 1px;
+  background: currentColor;
+  opacity: 1;
+  transform: translate(-50%, -50%) rotate(-45deg) scaleX(1);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.dp2-password-toggle.is-visible .dp2-password-eye::after {
+  opacity: 0;
+  transform: translate(-50%, -50%) rotate(-45deg) scaleX(0.25);
 }
 
 .dp2-board {
@@ -2115,6 +2219,26 @@
   50% {
     opacity: 0.36;
     transform: translate(-50%, -50%) rotate(-45deg) scale(1.12);
+  }
+}
+
+@keyframes dp2-click-ripple {
+  0% {
+    opacity: 0.72;
+    transform: translate(-50%, -50%) scale(0.35);
+  }
+  58% {
+    opacity: 0.42;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(6.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dp2-click-ripple {
+    animation-duration: 180ms;
   }
 }
 

@@ -6,7 +6,9 @@ import { markdownRemarkPlugins, markdownRehypePlugins } from './markdownMathSetu
 import HeroTitle from './components/hero-motion/HeroTitle';
 import ParticleField from './components/ParticleField';
 import IntroLoader from './components/IntroLoader';
-import DesignPreview, { AmbientField, CursorTrace } from './components/DesignPreview';
+import DesignPreview, { AmbientField } from './components/DesignPreview';
+import ClickRippleSurface from './components/ClickRippleSurface';
+import PasswordVisibilityToggle from './components/PasswordVisibilityToggle';
 import { decodeResourceMarkdownStream } from './utils/resourceStreamDecode';
 import {
   StudioMentorOverviewModal,
@@ -16,6 +18,12 @@ import {
 } from './components/LearningStudioBlocks';
 import { API_BASE } from './apiConfig';
 import 'katex/dist/katex.min.css';
+
+const USERNAME_PATTERN = /^[\u3400-\u4DBF\u4E00-\u9FFFA-Za-z0-9_]{2,16}$/;
+const sanitizeUsername = (value) =>
+  String(value || '')
+    .replace(/[^\u3400-\u4DBF\u4E00-\u9FFFA-Za-z0-9_]/g, '')
+    .slice(0, 16);
 
 // --- 内部组件：代码块 ---
 const CodeBlock = ({ language, value }) => {
@@ -455,11 +463,11 @@ const V29Button = ({ children, quiet = false, type = 'button', ...props }) => (
   </button>
 );
 
-const V29Field = ({ label, delay = 0, children }) => (
-  <label className="dp2-field" style={{ animationDelay: `${delay}ms` }}>
-    <span>{label}</span>
+const V29Field = ({ label, delay = 0, htmlFor, children }) => (
+  <div className="dp2-field" style={{ animationDelay: `${delay}ms` }}>
+    <label htmlFor={htmlFor}>{label}</label>
     {children}
-  </label>
+  </div>
 );
 
 function V29LearningMap() {
@@ -708,9 +716,9 @@ const LoginView = ({ onLoginSuccess }) => {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('reset') !== '1') return;
-    const u = (params.get('username') || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 16);
+    const u = sanitizeUsername(params.get('username') || '');
     const t = (params.get('token') || '').replace(/\s/g, '');
-    if (u.length >= 3 && t.length >= 16) {
+    if (u.length >= 2 && t.length >= 16) {
       setUsername(u);
       setResetToken(t);
       setAuthStep('forgot-reset');
@@ -722,6 +730,8 @@ const LoginView = ({ onLoginSuccess }) => {
   }, []);
 
   useEffect(() => {
+    setShowPassword(false);
+    setShowConfirmPassword(false);
     if (authStep === 'forgot') return;
     const timer = setTimeout(() => passwordRef.current?.focus(), 120);
     return () => clearTimeout(timer);
@@ -741,7 +751,6 @@ const LoginView = ({ onLoginSuccess }) => {
     const cleanRegEmail = regEmail.trim();
     const cleanForgotEmail = forgotEmail.trim().toLowerCase();
 
-    const usernameRegex = /^[a-zA-Z0-9_]{3,16}$/;
     /* 注册 / 重置：仅大小写字母与数字，且须同时含大写、小写、数字；6-20 位 */
     const passwordRegisterRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z0-9]{6,20}$/;
     const emailRegex = /^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/;
@@ -770,8 +779,8 @@ const LoginView = ({ onLoginSuccess }) => {
         triggerShake();
         return;
       }
-      if (!usernameRegex.test(cleanUsername)) {
-        setErrorMsg('新昵称需为 3-16 位字母、数字或下划线');
+      if (!USERNAME_PATTERN.test(cleanUsername)) {
+        setErrorMsg('新昵称需为 2-16 位中文、英文、数字或下划线');
         triggerShake();
         return;
       }
@@ -803,8 +812,8 @@ const LoginView = ({ onLoginSuccess }) => {
         triggerShake();
         return;
       }
-      if (!usernameRegex.test(cleanUsername)) {
-        setErrorMsg('昵称需为 3-16 位字母、数字或下划线');
+      if (!USERNAME_PATTERN.test(cleanUsername)) {
+        setErrorMsg('昵称需为 2-16 位中文、英文、数字或下划线');
         triggerShake();
         return;
       }
@@ -815,6 +824,16 @@ const LoginView = ({ onLoginSuccess }) => {
       }
       if (authStep === 'register' && !passwordRegisterRegex.test(cleanPassword)) {
         setErrorMsg('密码须为 6-20 位，只能包含大小写字母与数字，且需同时含有大写、小写与数字');
+        triggerShake();
+        return;
+      }
+      if (authStep === 'register' && !cleanConfirm) {
+        setErrorMsg('请再次输入密码');
+        triggerShake();
+        return;
+      }
+      if (authStep === 'register' && cleanPassword !== cleanConfirm) {
+        setErrorMsg('两次输入的密码不一致');
         triggerShake();
         return;
       }
@@ -936,6 +955,7 @@ const LoginView = ({ onLoginSuccess }) => {
             ? {
                 username: cleanUsername,
                 password: cleanPassword,
+                confirm_password: cleanConfirm,
                 email: cleanRegEmail,
               }
             : { username: cleanUsername, password: cleanPassword };
@@ -1047,8 +1067,9 @@ const LoginView = ({ onLoginSuccess }) => {
 
           <div className="dp2-form-lines">
             {authStep === 'forgot' ? (
-              <V29Field label="邮箱" delay={0}>
+              <V29Field label="邮箱" htmlFor="auth-forgot-email" delay={0}>
                 <input
+                  id="auth-forgot-email"
                   type="email"
                   autoComplete="email"
                   maxLength={255}
@@ -1063,15 +1084,20 @@ const LoginView = ({ onLoginSuccess }) => {
                 />
               </V29Field>
             ) : (
-              <V29Field label={authStep === 'forgot-reset' ? '新昵称' : '昵称'} delay={0}>
+              <V29Field
+                label={authStep === 'forgot-reset' ? '新昵称' : '昵称'}
+                htmlFor="auth-username"
+                delay={0}
+              >
                 <input
+                  id="auth-username"
                   type="text"
                   autoComplete="username"
                   maxLength={16}
                   placeholder={authStep === 'forgot-reset' ? '设置新昵称' : '输入昵称'}
                   value={username}
                   onChange={(e) => {
-                    setUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''));
+                    setUsername(sanitizeUsername(e.target.value));
                     if (errorMsg) setErrorMsg('');
                     if (successMsg) setSuccessMsg('');
                   }}
@@ -1081,8 +1107,9 @@ const LoginView = ({ onLoginSuccess }) => {
             )}
 
             {authStep === 'register' && (
-              <V29Field label="邮箱" delay={70}>
+              <V29Field label="邮箱" htmlFor="auth-register-email" delay={70}>
                 <input
+                  id="auth-register-email"
                   type="email"
                   autoComplete="email"
                   required
@@ -1100,8 +1127,9 @@ const LoginView = ({ onLoginSuccess }) => {
             )}
 
             {authStep === 'forgot-reset' && (
-              <V29Field label="令牌" delay={70}>
+              <V29Field label="令牌" htmlFor="auth-reset-token" delay={70}>
                 <input
+                  id="auth-reset-token"
                   type="text"
                   maxLength={128}
                   placeholder="邮件令牌"
@@ -1116,39 +1144,59 @@ const LoginView = ({ onLoginSuccess }) => {
             )}
 
             {(authStep === 'login' || authStep === 'register' || authStep === 'forgot-reset') && (
-              <V29Field label={authStep === 'forgot-reset' ? '新密码' : '密码'} delay={authStep === 'login' ? 70 : 140}>
-                <input
-                  ref={passwordRef}
-                  type={showPassword ? 'text' : 'password'}
-                  autoComplete={authStep === 'login' ? 'current-password' : 'new-password'}
-                  maxLength={authStep === 'login' ? 128 : 20}
-                  placeholder={authStep === 'login' ? '输入密码' : '安全密码'}
-                  value={password}
-                  onChange={(e) => {
-                    const val = authStep === 'login' ? e.target.value : e.target.value.replace(/[^A-Za-z0-9]/g, '');
-                    setPassword(val);
-                    if (errorMsg) setErrorMsg('');
-                    if (successMsg) setSuccessMsg('');
-                  }}
-                  onKeyDown={handleKeyDown}
-                />
+              <V29Field
+                label={authStep === 'forgot-reset' ? '新密码' : '密码'}
+                htmlFor="auth-password"
+                delay={authStep === 'login' ? 70 : 140}
+              >
+                <div className="dp2-password-control">
+                  <input
+                    id="auth-password"
+                    ref={passwordRef}
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete={authStep === 'login' ? 'current-password' : 'new-password'}
+                    maxLength={authStep === 'login' ? 128 : 20}
+                    placeholder={authStep === 'login' ? '输入密码' : '安全密码'}
+                    value={password}
+                    onChange={(e) => {
+                      const val = authStep === 'login' ? e.target.value : e.target.value.replace(/[^A-Za-z0-9]/g, '');
+                      setPassword(val);
+                      if (errorMsg) setErrorMsg('');
+                      if (successMsg) setSuccessMsg('');
+                    }}
+                    onKeyDown={handleKeyDown}
+                  />
+                  <PasswordVisibilityToggle
+                    visible={showPassword}
+                    onToggle={() => setShowPassword((current) => !current)}
+                    label={authStep === 'forgot-reset' ? '新密码' : '密码'}
+                  />
+                </div>
               </V29Field>
             )}
 
-            {authStep === 'forgot-reset' && (
-              <V29Field label="确认密码" delay={210}>
-                <input
-                  type={showConfirmPassword ? 'text' : 'password'}
-                  autoComplete="new-password"
-                  maxLength={20}
-                  placeholder="再次输入新密码"
-                  value={confirmPassword}
-                  onChange={(e) => {
-                    setConfirmPassword(e.target.value.replace(/[^A-Za-z0-9]/g, ''));
-                    if (errorMsg) setErrorMsg('');
-                  }}
-                  onKeyDown={handleKeyDown}
-                />
+            {(authStep === 'register' || authStep === 'forgot-reset') && (
+              <V29Field label="确认密码" htmlFor="auth-confirm-password" delay={210}>
+                <div className="dp2-password-control">
+                  <input
+                    id="auth-confirm-password"
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    maxLength={20}
+                    placeholder={authStep === 'register' ? '再次输入密码' : '再次输入新密码'}
+                    value={confirmPassword}
+                    onChange={(e) => {
+                      setConfirmPassword(e.target.value.replace(/[^A-Za-z0-9]/g, ''));
+                      if (errorMsg) setErrorMsg('');
+                    }}
+                    onKeyDown={handleKeyDown}
+                  />
+                  <PasswordVisibilityToggle
+                    visible={showConfirmPassword}
+                    onToggle={() => setShowConfirmPassword((current) => !current)}
+                    label="确认密码"
+                  />
+                </div>
               </V29Field>
             )}
 
@@ -1331,11 +1379,10 @@ const LoginView = ({ onLoginSuccess }) => {
                       type="text"
                       autoComplete="username"
                       maxLength={16}
-                      placeholder={authStep === 'forgot-reset' ? '设置新昵称' : '昵称 (3-16位字母/数字/下划线)'}
+                      placeholder={authStep === 'forgot-reset' ? '设置新昵称' : '昵称（支持中文）'}
                       value={username}
                       onChange={(e) => {
-                        const val = e.target.value.replace(/[^a-zA-Z0-9_]/g, '');
-                        setUsername(val);
+                        setUsername(sanitizeUsername(e.target.value));
                         if (errorMsg) setErrorMsg('');
                         if (successMsg) setSuccessMsg('');
                       }}
@@ -3993,21 +4040,8 @@ export default function App() {
   const [selectedSubject, setSelectedSubject] = useState(null);
   const [selectedStudyMode, setSelectedStudyMode] = useState('free');
   const [introDone, setIntroDone] = useState(false);
-  const liveRootRef = useRef(null);
   const isDesignPreview =
     typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'design';
-
-  const handleLivePointerMove = (event) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const x = ((event.clientX - bounds.left) / bounds.width) * 100;
-    const y = ((event.clientY - bounds.top) / bounds.height) * 100;
-
-    if (!liveRootRef.current) return;
-    liveRootRef.current.style.setProperty('--cursor-x', `${event.clientX}px`);
-    liveRootRef.current.style.setProperty('--cursor-y', `${event.clientY}px`);
-    liveRootRef.current.style.setProperty('--mx', `${x}%`);
-    liveRootRef.current.style.setProperty('--my', `${y}%`);
-  };
 
   const handleSwitchAccount = () => {
     localStorage.removeItem('currentUser');
@@ -4022,12 +4056,7 @@ export default function App() {
   }
 
   return (
-    <div
-      ref={liveRootRef}
-      className="dp2-root"
-      onPointerMove={handleLivePointerMove}
-    >
-      <CursorTrace />
+    <ClickRippleSurface className="dp2-root">
       {!introDone && <IntroLoader onComplete={() => setIntroDone(true)} />}
       <header className="dp2-header dp2-header-compact">
         <button
@@ -4075,6 +4104,6 @@ export default function App() {
         />
       )}
     </main>
-    </div>
+    </ClickRippleSurface>
   );
 }

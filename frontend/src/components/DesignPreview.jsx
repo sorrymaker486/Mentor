@@ -1,5 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useState } from 'react';
 import './DesignPreview.css';
+import ClickRippleSurface from './ClickRippleSurface';
+import PasswordVisibilityToggle from './PasswordVisibilityToggle';
 
 const tabs = [
   ['loading', '加载'],
@@ -37,6 +39,7 @@ const authCopy = {
       ['昵称', '唯一昵称', 'text'],
       ['邮箱', '注册邮箱', 'email'],
       ['密码', '安全密码', 'password'],
+      ['确认密码', '再次输入密码', 'password'],
     ],
     primary: '注册',
     secondary: '返回登录',
@@ -243,11 +246,26 @@ function Button({ children, quiet = false }) {
 }
 
 function FieldLine({ label, placeholder, type, delay = 0 }) {
+  const inputId = useId();
+  const isPassword = type === 'password';
+  const [visible, setVisible] = useState(false);
+
   return (
-    <label className="dp2-field" style={{ animationDelay: `${delay}ms` }}>
-      <span>{label}</span>
-      <input placeholder={placeholder} type={type} />
-    </label>
+    <div className="dp2-field" style={{ animationDelay: `${delay}ms` }}>
+      <label htmlFor={inputId}>{label}</label>
+      {isPassword ? (
+        <div className="dp2-password-control">
+          <input id={inputId} placeholder={placeholder} type={visible ? 'text' : 'password'} />
+          <PasswordVisibilityToggle
+            visible={visible}
+            onToggle={() => setVisible((current) => !current)}
+            label={label}
+          />
+        </div>
+      ) : (
+        <input id={inputId} placeholder={placeholder} type={type} />
+      )}
+    </div>
   );
 }
 
@@ -594,7 +612,6 @@ const pages = {
 
 export default function DesignPreview() {
   const [active, setActive] = useState(getInitialTab);
-  const rootRef = useRef(null);
 
   useEffect(() => {
     const onHashChange = () => setActive(getInitialTab());
@@ -608,25 +625,8 @@ export default function DesignPreview() {
     window.history.replaceState(null, '', nextUrl);
   }, [active]);
 
-  const handlePointerMove = (event) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const x = ((event.clientX - bounds.left) / bounds.width) * 100;
-    const y = ((event.clientY - bounds.top) / bounds.height) * 100;
-
-    if (!rootRef.current) return;
-    rootRef.current.style.setProperty('--cursor-x', `${event.clientX}px`);
-    rootRef.current.style.setProperty('--cursor-y', `${event.clientY}px`);
-    rootRef.current.style.setProperty('--mx', `${x}%`);
-    rootRef.current.style.setProperty('--my', `${y}%`);
-  };
-
   return (
-    <div
-      ref={rootRef}
-      className="dp2-root"
-      onPointerMove={handlePointerMove}
-    >
-      <CursorTrace />
+    <ClickRippleSurface className="dp2-root">
       <header className="dp2-header">
         <button type="button" className="dp2-brand" onClick={() => setActive('loading')}>
           <strong>Mentor</strong>
@@ -648,6 +648,6 @@ export default function DesignPreview() {
       <main className="dp2-main" key={active}>
         {pages[active] || pages.loading}
       </main>
-    </div>
+    </ClickRippleSurface>
   );
 }
