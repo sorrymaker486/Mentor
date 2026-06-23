@@ -95,10 +95,11 @@ const courseShowcase = [
 ];
 
 const resourceModes = [
-  ['讲义', '压缩当前章节', 'brief'],
-  ['错题', '定位薄弱节点', 'miss'],
-  ['图谱', '连接概念关系', 'map'],
-  ['计划', '安排复习节奏', 'plan'],
+  ['精讲', '整理本节结构', 'brief'],
+  ['练习', '生成小题检查', 'miss'],
+  ['拓展', '联网补充来源', 'plan'],
+  ['代码', '落成实操案例', 'map'],
+  ['短讲', '转成讲解脚本', 'plan'],
 ];
 
 const quizItems = [
@@ -477,36 +478,57 @@ function ResourcesPage() {
   return (
     <PageShell variant="resources">
       <div className="dp2-resources">
-        <section className="dp2-section-title">
-          <div className="dp2-mini-label">RESOURCE</div>
-          <h2>资源生成</h2>
-          <p>从当前章节抽取内容，生成可复习的材料。</p>
-        </section>
-        <section className="dp2-resource-panel">
-          <div className="dp2-resource-modes">
-            {resourceModes.map(([title, desc, tone], index) => (
-              <button key={title} className={`dp2-resource-mode is-${tone}`} type="button" style={{ animationDelay: `${index * 70}ms` }}>
-                <span>{title}</span>
-                <small>{desc}</small>
-              </button>
-            ))}
-          </div>
-          <div className="dp2-resource-output">
-            <span>PREVIEW</span>
-            <h3>梯度下降复习包</h3>
-            <p>包含关键概念、错因提示、章节图谱和下一轮练习建议。</p>
-            <div className="dp2-resource-lines" aria-hidden>
-              <i />
-              <i />
-              <i />
-              <i />
-            </div>
-            <div className="dp2-actions">
+        <div className="dp2-resource-toolbar">
+          <button type="button" className="dp2-resource-back">
+            <span aria-hidden>←</span>
+            <b>回到学习</b>
+          </button>
+          <section className="dp2-resource-title" aria-label="当前素材范围">
+            <p>从当前章节抽取内容，生成可复习的材料。</p>
+          </section>
+        </div>
+        <div className="dp2-resource-layout">
+          <aside className="dp2-resource-controls">
+            <nav className="dp2-resource-modes" aria-label="资源类型">
+              {resourceModes.map(([title, desc, tone], index) => (
+                <button key={title} className={`dp2-resource-mode is-${tone}`} type="button" style={{ animationDelay: `${index * 70}ms` }}>
+                  <span>{title}</span>
+                  <small>{desc}</small>
+                </button>
+              ))}
+            </nav>
+            <div className="dp2-resource-actions dp2-actions">
               <Button>生成</Button>
               <Button quiet>预览</Button>
             </div>
-          </div>
-        </section>
+          </aside>
+          <section className="dp2-resource-panel">
+            <div className="dp2-resource-output">
+              <div className="dp2-resource-output-head">
+                <div>
+                  <span>PREVIEW</span>
+                  <h3>梯度下降复习包</h3>
+                </div>
+              </div>
+              <div className="dp2-resource-markdown dp2-answer">
+                <h1>本节精讲</h1>
+                <p>先抓住一个重点：梯度下降不是背公式，而是沿着“更快变小”的方向一点点修正。</p>
+                <h2>看懂什么</h2>
+                <ul>
+                  <li>步长太大会来回震荡，太小会走得很慢。</li>
+                  <li>每一步都要看当前位置的变化方向。</li>
+                  <li>能说清“为什么这样更新”，再进入练习。</li>
+                </ul>
+              </div>
+              <div className="dp2-resource-lines" aria-hidden>
+                <i />
+                <i />
+                <i />
+                <i />
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
     </PageShell>
   );

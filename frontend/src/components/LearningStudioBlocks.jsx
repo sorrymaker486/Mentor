@@ -512,7 +512,8 @@ export function StudioPathPanel({ apiBase, username, subject, progressSignal = '
   );
 }
 
-const LIVE_WINDOW_TYPES = new Set(['course_digest', 'mind_map', 'extended_reading', 'code_lab', 'video_script']);
+const MATERIAL_RESOURCE_EXCLUDE = new Set(['mind_map']);
+const LIVE_WINDOW_TYPES = new Set(['course_digest', 'extended_reading', 'code_lab', 'video_script']);
 
 /** 对话页右侧：按小节生成资源；按类型进入可缩放弹窗 / 导图 / 答题 / 外链 / 导演板等 */
 export function StudioResourcePanel({ apiBase, username, subject, chapterId, sectionId, scopeLabel }) {
@@ -546,14 +547,17 @@ export function StudioResourcePanel({ apiBase, username, subject, chapterId, sec
   const resourceEntries = useMemo(() => {
     const rt = overview?.resource_types;
     if (!rt || typeof rt !== 'object') return [];
-    return Object.entries(rt).map(([key, v]) => ({
-      key,
-      title: v?.title || key,
-      chain: v?.agent_chain || '',
-    }));
+    return Object.entries(rt)
+      .filter(([key]) => !MATERIAL_RESOURCE_EXCLUDE.has(key))
+      .map(([key, v]) => ({
+        key,
+        title: v?.title || key,
+        chain: v?.agent_chain || '',
+      }));
   }, [overview]);
 
   const canGen = !!(chapterId && sectionId);
+  const selectedEntry = resourceEntries.find((x) => x.key === activeKey) || resourceEntries[0] || null;
 
   const resetStreamState = () => {
     setStreamText('');
@@ -677,30 +681,53 @@ export function StudioResourcePanel({ apiBase, username, subject, chapterId, sec
         {streamErr && !win && <p className="text-[11px] text-red-800">{streamErr}</p>}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-3 scrollbar-hide pb-4">
+      <div className="shrink-0 border-b border-[#1a1f24]/[0.06] px-1 py-3">
         <p className="mb-2 px-0.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#1a1f24]/38">资源类型</p>
-        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+        <div className="scrollbar-hide flex min-w-0 gap-3 overflow-x-auto pb-1">
           {resourceEntries.map((x) => (
-            <div
+            <button
               key={x.key}
-              className={`rounded-xl border bg-white/95 p-3 shadow-[0_2px_12px_rgba(26,31,36,0.04)] transition-shadow ${
-                activeKey === x.key ? 'border-[#b8955c]/50 ring-1 ring-[#b8955c]/20' : 'border-[#1a1f24]/[0.07]'
+              type="button"
+              onClick={() => setActiveKey(x.key)}
+              className={`relative grid min-w-[8.6rem] gap-1 px-0 pb-2 pt-0.5 text-left transition-colors ${
+                selectedEntry?.key === x.key ? 'text-[#1a1f24]' : 'text-[#1a1f24]/48 hover:text-[#1a1f24]/76'
               }`}
             >
-              <div className="text-[13px] font-semibold leading-snug text-[#1a1f24]">{x.title}</div>
-              <div className="mt-1 line-clamp-1 font-mono text-[10px] text-[#1a1f24]/38">{x.chain}</div>
-              <button
-                type="button"
-                disabled={streaming || !canGen}
-                onClick={() => void startStream(x.key)}
-                className="mt-2.5 w-full rounded-lg border border-[#1a1f24]/[0.1] bg-[#f6f4ef] py-2 text-[11px] font-semibold text-[#1a1f24]/78 transition-colors hover:border-[#b8955c]/45 hover:bg-white disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                {streaming && activeKey === x.key ? '生成中…' : actionLabel(x.key)}
-              </button>
-            </div>
+              <span className="text-[13px] font-semibold leading-snug">{x.title}</span>
+              <small className="line-clamp-1 font-mono text-[10px] text-[#1a1f24]/38">{x.chain}</small>
+              <i
+                className={`mt-1 h-px w-full bg-gradient-to-r from-[#b8955c]/50 via-[#8ea6b0]/35 to-transparent transition-opacity ${
+                  selectedEntry?.key === x.key ? 'opacity-100' : 'opacity-35'
+                }`}
+                aria-hidden
+              />
+            </button>
           ))}
         </div>
         {!overview?.resource_types && <p className="mt-3 text-center text-[12px] text-[#1a1f24]/40">正在加载资源类型…</p>}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-1 py-4 scrollbar-hide">
+        {selectedEntry ? (
+          <div className="mx-auto flex min-h-full max-w-[18rem] flex-col justify-center gap-3">
+            <div>
+              <p className="pa-label text-[10px] text-[#1a1f24]/35">当前选择</p>
+              <h3 className="mt-2 font-display text-[1.45rem] font-medium leading-tight text-[#1a1f24]/86">{selectedEntry.title}</h3>
+              <p className="mt-2 line-clamp-2 font-mono text-[11px] leading-relaxed text-[#1a1f24]/38">{selectedEntry.chain}</p>
+            </div>
+            <button
+              type="button"
+              disabled={streaming || !canGen}
+              onClick={() => void startStream(selectedEntry.key)}
+              className="relative mt-2 w-fit overflow-hidden px-0 pb-2 pt-1 text-[12px] font-semibold tracking-[0.16em] text-[#1a1f24]/72 transition-colors hover:text-[#1a1f24] disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {streaming && activeKey === selectedEntry.key ? '生成中…' : actionLabel(selectedEntry.key)}
+              <span className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-[#8ea6b0]/60 via-[#b8955c]/42 to-transparent" aria-hidden />
+            </button>
+          </div>
+        ) : (
+          <p className="mt-3 text-center text-[12px] text-[#1a1f24]/40">暂无可用资源类型</p>
+        )}
       </div>
 
       {win === 'course_digest' && (

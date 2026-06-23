@@ -1348,7 +1348,7 @@ def seed_courses(db: Session):
                 course_data["name"],
                 chap,
                 ware,
-                attach_files_for_course_ids=("dl",),
+                attach_files_for_course_ids=None,
             )
             total_chapters += 1
             total_sections += len(sections)
@@ -1368,6 +1368,53 @@ def seed_courses(db: Session):
         f"[OK] 课程数据导入完成：{len(COURSES_DATA)} 门课程，{total_chapters} 个大章，{total_sections} 个小节；"
         f"深度学习课件目录：{deep_learning_courseware_dir()}（当前扫描到 {len(ware)} 个文本文件）"
     )
+
+
+def course_seed_refresh_reason(db: Session) -> str:
+    expected_ids = {str(c["id"]) for c in COURSES_DATA}
+    existing_ids = {row[0] for row in db.query(CourseDB.id).all()}
+    if not existing_ids:
+        return "empty-course-table"
+    missing_ids = sorted(expected_ids - existing_ids)
+    if missing_ids:
+        return f"missing-courses:{','.join(missing_ids)}"
+
+    ware = load_text_courseware_files()
+    if not ware:
+        return ""
+
+    section_total = 0
+    attached_total = 0
+    for (subsections_json,) in db.query(ChapterDB.subsections).all():
+        for sec in parse_subsections_json(subsections_json):
+            body = str(sec.get("content") or "")
+            section_total += 1
+            if "课程知识库摘录" in body:
+                attached_total += 1
+    if section_total > 0 and attached_total == 0:
+        return "courseware-files-present-but-db-not-attached"
+    return ""
+
+
+def resolve_course(db: Session, subject: str, *, auto_seed: bool = False) -> CourseDB | None:
+    value = (subject or "").strip()
+    if not value:
+        return None
+
+    def lookup() -> CourseDB | None:
+        course = db.query(CourseDB).filter(CourseDB.name == value).first()
+        if course:
+            return course
+        course = db.query(CourseDB).filter(CourseDB.id == value).first()
+        if course:
+            return course
+        return db.query(CourseDB).filter(func.lower(CourseDB.id) == value.lower()).first()
+
+    course = lookup()
+    if course or not auto_seed:
+        return course
+    seed_courses(db)
+    return lookup()
 
 
 def _chapter_row(db: Session, course_id: str, chapter_id: str) -> ChapterDB | None:
@@ -1692,9 +1739,10 @@ async def _app_lifespan(_app: FastAPI):
     ensure_schema()
     db = SessionLocal()
     try:
-        if db.query(CourseDB).count() == 0:
+        refresh_reason = course_seed_refresh_reason(db)
+        if refresh_reason:
             seed_courses(db)
-            print("[mentor-backend] 空库：已自动导入课程数据（等价于访问一次 /seed）")
+            print(f"[mentor-backend] courseware refreshed: {refresh_reason}")
     finally:
         db.close()
     print(
@@ -2430,7 +2478,7 @@ def learning_studio_path_get(
     u = db.query(UserDB).filter(UserDB.username == username).first()
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
-    course = db.query(CourseDB).filter(CourseDB.name == subject).first()
+    course = resolve_course(db, subject)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     path = _studio_build_learning_path(db, u.id, subject, course)
@@ -2442,7 +2490,7 @@ def learning_studio_path_rebuild(body: StudioPortraitRefreshBody, db: Session = 
     u = db.query(UserDB).filter(UserDB.username == body.username).first()
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
-    course = db.query(CourseDB).filter(CourseDB.name == body.subject).first()
+    course = resolve_course(db, body.subject)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     path = _studio_build_learning_path(db, u.id, body.subject, course)
@@ -2465,7 +2513,7 @@ def learning_studio_resource_stream(body: StudioResourceStreamBody, db: Session 
         )
     assert_user_content_safe(body.extra_hint)
     hint = sanitize_user_plaintext(body.extra_hint, max_len=2000)
-    course = db.query(CourseDB).filter(CourseDB.name == body.subject).first()
+    course = resolve_course(db, body.subject)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     ch_row = _chapter_row(db, course.id, body.chapter_id)
@@ -2518,10 +2566,39 @@ def learning_studio_resource_stream(body: StudioResourceStreamBody, db: Session 
         raise HTTPException(status_code=502, detail=f"资源生成失败: {exc}") from exc
 
 
+@app.get("/courses")
+def list_courses(db: Session = Depends(get_db)):
+    courses = sorted(db.query(CourseDB).all(), key=lambda x: natural_sort_key(x.id))
+    result = []
+    for course in courses:
+        chapters = sorted(course.chapters, key=lambda x: natural_sort_key(x.id))
+        first_chapter = chapters[0] if chapters else None
+        first_sections = sections_natural_order(parse_subsections_json(first_chapter.subsections)) if first_chapter else []
+        section_count = sum(len(parse_subsections_json(ch.subsections)) for ch in chapters)
+        try:
+            goals = json.loads(course.learning_goals or "[]")
+        except json.JSONDecodeError:
+            goals = []
+        result.append(
+            {
+                "id": course.id,
+                "name": course.name,
+                "source": course.source,
+                "description": course.description,
+                "learning_goals": goals if isinstance(goals, list) else [],
+                "chapter_count": len(chapters),
+                "section_count": section_count,
+                "first_chapter_title": first_chapter.title if first_chapter else "",
+                "first_section_title": first_sections[0]["title"] if first_sections else "",
+            }
+        )
+    return {"courses": result, "courseware_dir": str(deep_learning_courseware_dir())}
+
+
 @app.get("/learning-catalog")
 def learning_catalog(subject: str = Query(..., min_length=1), db: Session = Depends(get_db)):
     """前端章节目录：大章 + 小节 id/title（不含正文，避免响应过大）。"""
-    course = db.query(CourseDB).filter(CourseDB.name == subject).first()
+    course = resolve_course(db, subject, auto_seed=True)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在，请先访问 /seed 导入数据")
     chapters = []
@@ -2602,7 +2679,7 @@ def learning_start_section(body: LearningStartBody, db: Session = Depends(get_db
     u = db.query(UserDB).filter(UserDB.username == body.username).first()
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
-    course = db.query(CourseDB).filter(CourseDB.name == body.subject).first()
+    course = resolve_course(db, body.subject)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     ch_row = _chapter_row(db, course.id, body.chapter_id)
@@ -2714,7 +2791,7 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
     if (getattr(sess, "session_kind", None) or "chat") != "learn":
         raise HTTPException(status_code=400, detail="不是 AI 带学会话")
 
-    course = db.query(CourseDB).filter(CourseDB.name == body.subject).first()
+    course = resolve_course(db, body.subject)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     ch_row = _chapter_row(db, course.id, body.chapter_id)
@@ -2946,7 +3023,7 @@ def learning_progress(
     u = db.query(UserDB).filter(UserDB.username == username).first()
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
-    course = db.query(CourseDB).filter(CourseDB.name == subject).first()
+    course = resolve_course(db, subject)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
 
@@ -3016,7 +3093,7 @@ def learning_small_quiz_prepare(body: SmallQuizPrepareBody, db: Session = Depend
     u = db.query(UserDB).filter(UserDB.username == body.username).first()
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
-    course = db.query(CourseDB).filter(CourseDB.name == body.subject).first()
+    course = resolve_course(db, body.subject)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     ch_row = _chapter_row(db, course.id, body.chapter_id)
@@ -3130,7 +3207,7 @@ def learning_chapter_quiz_prepare(body: ChapterQuizPrepareBody, db: Session = De
         raise HTTPException(status_code=404, detail="用户不存在")
     if not _all_sections_quiz_passed(db, u.id, body.subject, body.chapter_id):
         raise HTTPException(status_code=400, detail="需先完成本大章下所有小节测验")
-    course = db.query(CourseDB).filter(CourseDB.name == body.subject).first()
+    course = resolve_course(db, body.subject)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     ch_row = _chapter_row(db, course.id, body.chapter_id)
@@ -3306,7 +3383,7 @@ def _execute_ask_stream(
     section_id: Optional[str],
     session_id: Optional[int],
 ) -> StreamingResponse:
-    course = db.query(CourseDB).filter(CourseDB.name == subject).first()
+    course = resolve_course(db, subject)
     cid = (chapter_id or "").strip()
     sid = (section_id or "").strip()
 

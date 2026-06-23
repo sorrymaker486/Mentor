@@ -1,4 +1,4 @@
-"""课程目录规范化、课件目录扫描、章节小节参考资料解析。"""
+"""课程目录规范化、课程知识库扫描、章节小节参考资料解析。"""
 from __future__ import annotations
 
 import json
@@ -7,8 +7,13 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
+COURSEWARE_DIR_NAME = "courseware"
+LEGACY_COURSEWARE_DIR_NAME = "深度学习课件"
+SUPPORTED_TEXT_SUFFIXES = {".md", ".txt"}
+
+
 def natural_sort_key(value: str | None) -> tuple[Any, ...]:
-    """按 id 中的数字分段做自然序（如 math-2 < math-10、sec-2 < sec-10）。"""
+    """按 id 中的数字分段做自然序，如 math-2 < math-10。"""
     s = (value or "").strip()
     if not s:
         return ("",)
@@ -27,61 +32,149 @@ def natural_sort_key(value: str | None) -> tuple[Any, ...]:
 def sections_natural_order(sections: list[dict[str, str]]) -> list[dict[str, str]]:
     return sorted(sections, key=lambda sec: natural_sort_key(str(sec.get("id") or "")))
 
-# 与 backend 同级：项目根下的「深度学习课件」
-COURSEWARE_DIR_NAME = "深度学习课件"
-
 
 def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def backend_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def courseware_root() -> Path:
+    return backend_root() / COURSEWARE_DIR_NAME
+
+
+def courseware_dirs() -> list[Path]:
+    """优先读取会被 Docker 复制的 backend/courseware，兼容旧的项目根目录课件。"""
+    roots = [courseware_root(), project_root() / LEGACY_COURSEWARE_DIR_NAME]
+    deduped: list[Path] = []
+    for root in roots:
+        if root not in deduped:
+            deduped.append(root)
+    return deduped
+
+
 def deep_learning_courseware_dir() -> Path:
-    return project_root() / COURSEWARE_DIR_NAME
+    """兼容旧导入名；现在返回通用课程知识库目录。"""
+    return courseware_root()
+
+
+def _norm_key(value: str | None) -> str:
+    return re.sub(r"[\s\-_/|:：,，.。()（）【】\[\]《》<>]+", "", (value or "").lower())
 
 
 def load_text_courseware_files() -> dict[str, str]:
-    """读取「深度学习课件」下所有 .md/.txt，按文件名 stem 索引（供与小节标题模糊匹配）。"""
-    root = deep_learning_courseware_dir()
+    """读取课程知识库下所有 .md/.txt，按相对路径和 stem 建索引。"""
     out: dict[str, str] = {}
-    if not root.is_dir():
-        return out
-    for p in root.rglob("*"):
-        if not p.is_file():
+    for root in courseware_dirs():
+        if not root.is_dir():
             continue
-        if p.suffix.lower() not in (".md", ".txt"):
-            continue
-        try:
-            body = p.read_text(encoding="utf-8", errors="ignore").strip()
-        except OSError:
-            continue
-        if not body:
-            continue
-        key = p.stem.strip()
-        if key:
-            out[key] = body
+        for p in root.rglob("*"):
+            if not p.is_file() or p.suffix.lower() not in SUPPORTED_TEXT_SUFFIXES:
+                continue
+            try:
+                body = p.read_text(encoding="utf-8", errors="ignore").strip()
+            except OSError:
+                continue
+            if not body:
+                continue
+            rel_key = str(p.relative_to(root).with_suffix("")).replace("\\", "/").strip()
+            stem_key = p.stem.strip()
+            for key in (rel_key, stem_key, _norm_key(rel_key), _norm_key(stem_key)):
+                if key:
+                    out.setdefault(key, body)
     return out
 
 
-def _match_attachment(title: str, files: dict[str, str]) -> str:
-    """按小节标题与课件文件名做简单匹配，命中则附加原文（截断）。"""
-    if not files or not title:
+def _extract_heading_block(body: str, title: str, max_chars: int = 12000) -> str:
+    """从课程 md 中提取与章节/小节标题对应的标题块。"""
+    target = _norm_key(title)
+    if not body or not target:
         return ""
-    for stem, body in files.items():
-        if not stem:
+
+    lines = body.splitlines()
+    heading_re = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+    for i, line in enumerate(lines):
+        m = heading_re.match(line)
+        if not m:
             continue
-        if stem in title or title in stem:
-            return body[:12000]
+        heading = re.sub(r"[#`*_]+", "", m.group(2)).strip()
+        heading_key = _norm_key(heading)
+        if target not in heading_key and heading_key not in target:
+            continue
+        level = len(m.group(1))
+        end = len(lines)
+        for j in range(i + 1, len(lines)):
+            next_match = heading_re.match(lines[j])
+            if next_match and len(next_match.group(1)) <= level:
+                end = j
+                break
+        return "\n".join(lines[i:end]).strip()[:max_chars]
     return ""
 
 
+def _course_file_body(course_id: str, course_name: str, files: dict[str, str]) -> str:
+    candidates = [
+        course_id,
+        course_name,
+        f"{course_id}/{course_id}",
+        f"{course_id}/index",
+        f"{course_name}/{course_name}",
+        f"{course_name}/index",
+    ]
+    for key in candidates:
+        body = files.get(key) or files.get(_norm_key(key))
+        if body:
+            return body
+    return ""
+
+
+def _match_attachment(
+    course_id: str,
+    course_name: str,
+    chapter_title: str,
+    section_id: str,
+    section_title: str,
+    files: dict[str, str],
+) -> str:
+    """按 section_id、标题块、课程文件三层兜底匹配课程知识库。"""
+    if not files:
+        return ""
+
+    for key in (
+        section_id,
+        f"{course_id}/{section_id}",
+        f"{course_name}/{section_id}",
+        _norm_key(section_id),
+        _norm_key(f"{course_id}/{section_id}"),
+    ):
+        body = files.get(key)
+        if body:
+            return body[:12000]
+
+    course_body = _course_file_body(course_id, course_name, files)
+    for title in (section_title, chapter_title):
+        block = _extract_heading_block(course_body, title)
+        if block:
+            return block
+
+    for body in files.values():
+        block = _extract_heading_block(body, section_title) or _extract_heading_block(body, chapter_title)
+        if block:
+            return block
+
+    return course_body[:12000]
+
+
 def default_section_body(course_name: str, chapter_title: str, section_title: str) -> str:
-    """教材小节默认讲义（结构化纲要，便于模型严格围绕本节）。未单独提供文件时使用。"""
+    """未提供独立 md 时的严格小节边界说明。"""
     return (
         f"【课程】{course_name}\n"
         f"【大章】{chapter_title}\n"
         f"【小节】{section_title}\n\n"
-        f"本小节的学习范围仅限上述小节标题在教材中的对应内容。请围绕定义、核心结论、典型方法、常见误区与例题类型展开讲解；"
-        f"不要引入本节教材未涉及的后序章节结论作为主要依据。若需要前置概念，仅作一句话回顾并指向应复习的小节。"
+        "本小节只围绕上面标题对应的知识范围展开。讲解应覆盖定义、核心结论、典型方法、常见误区与例题类型；"
+        "不要把后续章节结论当作当前小节的主要依据。如需前置知识，只做简短回顾并指出应复习的小节。"
     )
 
 
@@ -93,12 +186,15 @@ def normalize_subsections(
 ) -> list[dict[str, str]]:
     """
     将 chapters[].subsections 规范为 [{id,title,content}, ...]。
-    支持元素为 str 或已是 dict。
+    支持元素为 str 或 dict。课程知识库按 course_id/section_id.md 优先匹配。
     """
     cid = str(chapter.get("id") or "")
+    course_id = cid.split("-", 1)[0] if cid else ""
     raw = chapter.get("subsections") or []
     attach = courseware_files or {}
-    want_files = attach_files_for_course_ids is None or cid.split("-", 1)[0] in set(attach_files_for_course_ids)
+    allowed = set(attach_files_for_course_ids or [])
+    want_files = attach_files_for_course_ids is None or course_id in allowed
+    chapter_title = str(chapter.get("title") or "")
 
     out: list[dict[str, str]] = []
     for i, item in enumerate(raw):
@@ -112,13 +208,17 @@ def normalize_subsections(
             content = ""
 
         if not content:
-            content = default_section_body(course_name, str(chapter.get("title") or ""), title)
+            content = default_section_body(course_name, chapter_title, title)
 
         extra = ""
         if want_files:
-            extra = _match_attachment(title, attach)
+            extra = _match_attachment(course_id, course_name, chapter_title, sid, title, attach)
         if extra:
-            content = f"{content}\n\n--- 课件摘录（来自项目「{COURSEWARE_DIR_NAME}」目录，按文件名匹配） ---\n{extra}"
+            content = (
+                f"{content}\n\n"
+                f"--- 课程知识库摘录（来自 backend/{COURSEWARE_DIR_NAME}，按小节 id / 标题匹配）---\n"
+                f"{extra}"
+            )
 
         out.append({"id": sid, "title": title, "content": content})
 
@@ -162,28 +262,5 @@ def find_section(chapter_row_subsections_json: str, section_id: str | None) -> d
     return None
 
 
-def scope_display(chapter_title: str, section_title: str | None) -> str:
-    if section_title:
-        return f"{chapter_title} › {section_title}"
-    return chapter_title
-
-
-def parse_legacy_session_chapter(value: str) -> tuple[str | None, str | None, str]:
-    """
-    解析会话中保存的章节字段。
-    新格式: chapterId|sectionId
-    旧格式: 纯标题或「大章 › 小节」
-    """
-    v = (value or "").strip()
-    if not v:
-        return None, None, ""
-    if "|" in v and not v.replace("|", "").isspace():
-        parts = v.split("|", 1)
-        ch_id = parts[0].strip() or None
-        sec_id = parts[1].strip() or None if len(parts) > 1 else None
-        return ch_id, sec_id, v
-    if "›" in v or ">" in v:
-        sep = "›" if "›" in v else ">"
-        a, b = v.split(sep, 1)
-        return None, None, v.strip()
-    return None, None, v
+def scope_display(chapter_title: str, section_title: str | None = None) -> str:
+    return f"{chapter_title} / {section_title}" if section_title else chapter_title

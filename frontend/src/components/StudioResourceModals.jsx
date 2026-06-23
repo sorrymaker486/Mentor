@@ -850,11 +850,13 @@ export function ExtendedReadingWindow({ open, rawMarkdown, streaming, onClose, o
 
 function extractFencedCodes(text) {
   const out = [];
-  const re = /```(\w+)?\s*([\s\S]*?)```/g;
+  const re = /(```|~~~)[ \t]*([^\n`]*)\n([\s\S]*?)\1/g;
   let m;
   while ((m = re.exec(text || '')) !== null) {
-    if ((m[1] || '').toLowerCase() === 'mermaid') continue;
-    out.push({ lang: m[1] || 'text', code: m[2].trim() });
+    const lang = (m[2] || 'text').trim().split(/\s+/)[0].toLowerCase() || 'text';
+    if (lang === 'mermaid') continue;
+    const code = m[3].trim();
+    if (code) out.push({ lang, code });
   }
   return out;
 }

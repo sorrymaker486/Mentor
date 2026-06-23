@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip } from 'recharts';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { markdownRemarkPlugins, markdownRehypePlugins } from './markdownMathSetup';
@@ -9,7 +10,10 @@ import IntroLoader from './components/IntroLoader';
 import DesignPreview, { AmbientField } from './components/DesignPreview';
 import ClickRippleSurface from './components/ClickRippleSurface';
 import PasswordVisibilityToggle from './components/PasswordVisibilityToggle';
+import MindmapOutlineView from './components/MindmapOutlineView';
+import { markdownToMarkmapOutline } from './utils/mindmapOutline';
 import { decodeResourceMarkdownStream } from './utils/resourceStreamDecode';
+import { parseStructuredVideoScript } from './utils/videoScriptParse';
 import {
   StudioMentorOverviewModal,
   StudioPortraitCard,
@@ -442,11 +446,26 @@ const v29PathItems = ['概念', '例题', '追问', '小测', '错因', '变式'
 
 const v29ResourceModes = [
   ['course_digest', '速记卡', '把这一节收成一页清爽笔记。', 'warm'],
-  ['mind_map', '关系图', '把知识点连成一张会呼吸的图。', 'cool'],
   ['practice_pack', '练一练', '用几道题摸清自己会到哪里。', 'violet'],
-  ['extended_reading', '再看看', '给你一条继续探索的小路。', 'warm'],
-  ['code_lab', '动手做', '把想法变成一个可尝试的小任务。', 'cool'],
+  ['extended_reading', '拓展阅读', '联网补充可信来源，再展开本节视野。', 'warm'],
+  ['code_lab', '代码实操', '把方法落成可运行、可调试的小案例。', 'cool'],
   ['video_script', '讲给别人听', '整理成一段能说出口的短讲稿。', 'violet'],
+];
+
+const MATERIAL_RESOURCE_EXCLUDE = new Set(['mind_map']);
+
+const clamp01 = (value, fallback = 0) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(1, n));
+};
+
+const v29AbilityAxes = [
+  { key: 'foundation', label: '理解', hint: '概念边界', angle: -90, base: 0.42 },
+  { key: 'reasoning', label: '推理', hint: '步骤连贯', angle: -18, base: 0.36 },
+  { key: 'expression', label: '表达', hint: '说清过程', angle: 54, base: 0.34 },
+  { key: 'transfer', label: '迁移', hint: '换题可用', angle: 126, base: 0.3 },
+  { key: 'review', label: '复盘', hint: '错因回收', angle: 198, base: 0.38 },
 ];
 
 const V29PageShell = ({ children, variant = 'default' }) => (
@@ -470,39 +489,395 @@ const V29Field = ({ label, delay = 0, htmlFor, children }) => (
   </div>
 );
 
-function V29LearningMap() {
-  const curve = ([x1, y1, x2, y2]) => {
-    const mx = (x1 + x2) / 2;
-    const my = (y1 + y2) / 2 - 9;
-    return `M${x1} ${y1} Q${mx} ${my} ${x2} ${y2}`;
-  };
+const qualitativeAbilityState = (value) => {
+  const n = Number(value || 0);
+  if (n >= 82) return '稳定展开';
+  if (n >= 64) return '正在成形';
+  if (n >= 46) return '需要练习';
+  return '刚刚启动';
+};
 
+function V29RadarTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  const current = payload.find((item) => item.dataKey === 'current');
+  const rhythm = payload.find((item) => item.dataKey === 'rhythm');
   return (
-    <div className="dp2-learning-map">
-      <svg viewBox="0 0 100 100" role="img" aria-label="学习画像知识网络">
-        {v29MapEdges.map((edge, index) => (
-          <path key={`edge-${index}`} className="dp2-map-edge" d={curve(edge)} style={{ animationDelay: `${index * 0.18}s` }} />
-        ))}
-        {v29MapSmallNodes.map(([x, y], index) => (
-          <circle key={`small-${index}`} className="dp2-map-small-node" cx={x} cy={y} r={index % 3 === 0 ? 1.7 : 1.1} />
-        ))}
-        {v29MapNodes.map(([id, x, y, label], index) => (
-          <g key={id} className={`dp2-map-node ${index === 0 ? 'is-core' : ''}`} style={{ animationDelay: `${index * 0.2}s` }}>
-            <circle cx={x} cy={y} r={index === 0 ? 4.4 : 3.2} />
-            <text x={x + 5} y={y - 4}>{label}</text>
-          </g>
-        ))}
-      </svg>
+    <div className="dp2-radar-tooltip">
+      <strong>{label}</strong>
+      <span>{current?.name || '当前'}：{qualitativeAbilityState(current?.value)}</span>
+      <span>{rhythm?.name || '节奏'}：{qualitativeAbilityState(rhythm?.value)}</span>
     </div>
   );
 }
 
-function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId, scopeLabel, onBack }) {
+const V29LearningMap = React.memo(function V29LearningMap({ profile = {} }) {
+  const glowId = React.useId().replace(/:/g, '');
+  const chartData = v29AbilityAxes.map((axis) => {
+    const value = clamp01(profile[axis.key] ?? axis.base, axis.base);
+    const rhythm = Math.max(0.28, axis.base + value * 0.36);
+    return {
+      ability: axis.label,
+      hint: axis.hint,
+      current: Math.round(value * 100),
+      rhythm: Math.round(clamp01(rhythm) * 100),
+    };
+  });
+
+  return (
+    <div className="dp2-ability-map dp2-radar-map">
+      <ResponsiveContainer width="100%" height="100%">
+        <RadarChart data={chartData} margin={{ top: 10, right: 22, bottom: 8, left: 22 }}>
+          <defs>
+            <filter id={`multi-stroke-line-glow-${glowId}`} x="-35%" y="-35%" width="170%" height="170%">
+              <feGaussianBlur stdDeviation="6" result="blur" />
+              <feColorMatrix
+                in="blur"
+                type="matrix"
+                values="0 0 0 0 0.38 0 0 0 0 0.53 0 0 0 0 0.54 0 0 0 0.48 0"
+                result="softGlow"
+              />
+              <feComposite in="SourceGraphic" in2="softGlow" operator="over" />
+            </filter>
+          </defs>
+          <Tooltip cursor={false} content={<V29RadarTooltip />} />
+          <PolarAngleAxis dataKey="ability" tickLine={false} tick={{ className: 'dp2-radar-tick' }} />
+          <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+          <PolarGrid gridType="polygon" radialLines stroke="rgba(100,129,132,0.22)" />
+          <Radar
+            name="当前轮廓"
+            dataKey="current"
+            stroke="var(--dp2-radar-primary)"
+            strokeWidth={1.6}
+            fill="none"
+            filter={`url(#multi-stroke-line-glow-${glowId})`}
+            isAnimationActive={false}
+          />
+          <Radar
+            name="复盘节奏"
+            dataKey="rhythm"
+            stroke="var(--dp2-radar-secondary)"
+            strokeWidth={1.15}
+            fill="none"
+            filter={`url(#multi-stroke-line-glow-${glowId})`}
+            isAnimationActive={false}
+          />
+        </RadarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+});
+
+const extractFencedCodeBlocks = (text) => {
+  const blocks = [];
+  const re = /(```|~~~)[ \t]*([^\n`]*)\n([\s\S]*?)\1/g;
+  let match;
+  while ((match = re.exec(text || '')) !== null) {
+    const lang = (match[2] || 'text').trim().split(/\s+/)[0].toLowerCase() || 'text';
+    if (lang === 'mermaid') continue;
+    const code = match[3].replace(/\s+$/g, '');
+    if (code.trim()) blocks.push({ lang, code });
+  }
+  return blocks;
+};
+
+const stripFencedCodeBlocks = (text) =>
+  String(text || '')
+    .replace(/(```|~~~)[ \t]*(?!mermaid\b)[^\n`]*\n[\s\S]*?\1/gi, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+function V29CodeResourceView({ markdown }) {
+  const codeBlocks = useMemo(() => extractFencedCodeBlocks(markdown), [markdown]);
+  const docMarkdown = useMemo(() => stripFencedCodeBlocks(markdown), [markdown]);
+  const hasCode = codeBlocks.length > 0;
+
+  return (
+    <div className={`dp2-code-workbench ${hasCode ? 'has-code' : 'is-text-only'}`}>
+      <div className="dp2-code-doc dp2-answer">
+        <ReactMarkdown
+          remarkPlugins={markdownRemarkPlugins}
+          rehypePlugins={markdownRehypePlugins}
+          components={{
+            code({ inline, children }) {
+              return inline ? <code>{children}</code> : <CodeBlock language="text" value={String(children).replace(/\n$/, '')} />;
+            },
+          }}
+        >
+          {normalizeMathText(docMarkdown || markdown)}
+        </ReactMarkdown>
+      </div>
+      {hasCode && (
+        <div className="dp2-code-stack" aria-label="代码片段">
+          <span>CODE</span>
+          {codeBlocks.map((block, index) => (
+            <article key={`${block.lang}-${index}`} className="dp2-code-card">
+              <div className="dp2-code-card-head">
+                <strong>{block.lang || 'text'}</strong>
+                <small>{String(index + 1).padStart(2, '0')}</small>
+              </div>
+              <CodeBlock language={block.lang || 'text'} value={block.code} />
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const extractMarkdownLinks = (text) => {
+  const links = [];
+  const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  let match;
+  while ((match = re.exec(text || '')) !== null) {
+    links.push({ title: match[1].trim(), url: match[2].trim() });
+  }
+  return links.filter((item, index, arr) => arr.findIndex((x) => x.url === item.url) === index).slice(0, 6);
+};
+
+function V29ExtendedReadingView({ markdown }) {
+  const links = useMemo(() => extractMarkdownLinks(markdown), [markdown]);
+
+  return (
+    <div className="dp2-reading-workbench">
+      <div className="dp2-resource-markdown dp2-answer">
+        <ReactMarkdown
+          remarkPlugins={markdownRemarkPlugins}
+          rehypePlugins={markdownRehypePlugins}
+          components={{
+            code({ inline, className, children }) {
+              const match = /language-(\w+)/.exec(className || '');
+              return !inline && match ? (
+                <CodeBlock language={match[1]} value={String(children).replace(/\n$/, '')} />
+              ) : (
+                <code>{children}</code>
+              );
+            },
+          }}
+        >
+          {normalizeMathText(markdown)}
+        </ReactMarkdown>
+      </div>
+      <aside className="dp2-source-rail" aria-label="拓展阅读信息来源">
+        <span>来源</span>
+        {links.length ? (
+          links.map((link, index) => (
+            <a key={link.url} href={link.url} target="_blank" rel="noreferrer">
+              <b>{String(index + 1).padStart(2, '0')}</b>
+              <em>{link.title}</em>
+            </a>
+          ))
+        ) : (
+          <p>生成后会在这里汇总可打开的来源。</p>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+function splitV29VideoScriptToShots(markdown) {
+  const t = String(markdown || '').trim();
+  if (!t) return [];
+  const headerParts = t.split(/\n(?=#{1,6}\s)/g).map((part) => part.trim()).filter(Boolean);
+  if (headerParts.length > 1) {
+    return headerParts.map((part, index) => ({
+      id: index,
+      shotNo: index + 1,
+      title: part.split('\n')[0].replace(/^#+\s*/, '').slice(0, 72) || `镜头 ${index + 1}`,
+      subtitle: '',
+      markdown: part,
+    }));
+  }
+
+  const shotPatterns = [
+    /\n(?=\*{0,2}(?:镜号|分镜|镜头|场景|画面)(?:[：:]|＿|\s))/,
+    /\n(?=【[^】]{1,48}】)/,
+    /\n(?=(?:镜号|分镜|镜头|场景)\s*[：:])/,
+    /\n(?=\d{1,2}[\.、]\s*(?:\*\*)?(?:镜|镜头|分镜|画面))/,
+    /\n(?=第[一二三四五六七八九十百千零〇\d]+(?:镜|段|场))/,
+  ];
+
+  for (const re of shotPatterns) {
+    const parts = t.split(re).map((part) => part.trim()).filter(Boolean);
+    if (parts.length > 1) {
+      return parts.map((part, index) => ({
+        id: index,
+        shotNo: index + 1,
+        title: part.split('\n')[0].replace(/^#+\s*/, '').replace(/^\*\*\s*/, '').slice(0, 72) || `镜头 ${index + 1}`,
+        subtitle: '',
+        markdown: part,
+      }));
+    }
+  }
+
+  const paras = t.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  if (paras.length > 2) {
+    return paras.map((part, index) => ({
+      id: index,
+      shotNo: index + 1,
+      title: `段落 ${index + 1}`,
+      subtitle: '',
+      markdown: part,
+    }));
+  }
+
+  return [{ id: 0, shotNo: 1, title: '完整讲稿', subtitle: '', markdown: t }];
+}
+
+function V29VideoScriptView({ markdown, streaming }) {
+  const { meta, shots } = useMemo(() => {
+    const structured = parseStructuredVideoScript(markdown || '');
+    if (structured?.shots?.length) return structured;
+    return { meta: null, shots: splitV29VideoScriptToShots(markdown) };
+  }, [markdown]);
+
+  return (
+    <div className="dp2-video-script-workbench">
+      <header className="dp2-video-script-head">
+        <span>{streaming ? '脚本生成中' : '可讲述脚本'}</span>
+        <p>{meta?.title || '按镜头拆开，边看边改，适合直接录制或口头复述。'}</p>
+        {(meta?.chapter || meta?.totalDuration) && <small>{[meta.chapter, meta.totalDuration].filter(Boolean).join(' · ')}</small>}
+      </header>
+      <div className="dp2-video-shot-list">
+        {shots.length ? (
+          shots.map((shot, index) => (
+            <article key={shot.id ?? index} className="dp2-video-shot">
+              <div className="dp2-video-shot-no">
+                <b>{String(shot.shotNo ?? index + 1).padStart(2, '0')}</b>
+                {shot.subtitle && <small>{shot.subtitle}</small>}
+              </div>
+              <div className="dp2-video-shot-body dp2-answer">
+                <h4>{shot.title}</h4>
+                <ReactMarkdown
+                  remarkPlugins={markdownRemarkPlugins}
+                  rehypePlugins={markdownRehypePlugins}
+                  components={{
+                    code({ inline, className, children }) {
+                      const match = /language-(\w+)/.exec(className || '');
+                      return !inline && match ? (
+                        <CodeBlock language={match[1]} value={String(children).replace(/\n$/, '')} />
+                      ) : (
+                        <code>{children}</code>
+                      );
+                    },
+                  }}
+                >
+                  {normalizeMathText(shot.markdown)}
+                </ReactMarkdown>
+              </div>
+            </article>
+          ))
+        ) : (
+          <p>生成后会在这里按镜头展开脚本。</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function V29InlineMindMap({ markdown, streaming, compact = false }) {
+  const hasText = !!String(markdown || '').trim();
+  return (
+    <div className={`dp2-inline-mindmap ${compact ? 'is-compact' : ''}`}>
+      {hasText || streaming ? (
+        <MindmapOutlineView fullMarkdown={markdown || ''} streaming={streaming} compact={compact} />
+      ) : (
+        <div className={`dp2-markmap-state ${compact ? 'is-compact' : ''}`}>
+          选择小节后生成知识导图。
+        </div>
+      )}
+    </div>
+  );
+}
+
+function buildSectionMindMapFallback({ subject, chapter, section, progressState }) {
+  if (!chapter || !section) return '';
+  const siblings = Array.isArray(chapter.sections) ? chapter.sections : [];
+  const currentIndex = siblings.findIndex((s) => s.id === section.id);
+  const before = siblings.slice(Math.max(0, currentIndex - 2), currentIndex).map((s) => s.title);
+  const after = siblings.slice(currentIndex + 1, currentIndex + 3).map((s) => s.title);
+  const state = progressState?.small_quiz_passed
+    ? '已完成小测'
+    : progressState?.learn_turns
+      ? '正在形成理解'
+      : '准备进入';
+
+  return [
+    `# ${section.title}`,
+    '',
+    `- 课程位置`,
+    `  - ${subject || '当前课程'}`,
+    `  - ${chapter.title}`,
+    `- 当前任务`,
+    `  - ${state}`,
+    `  - 先确认定义边界`,
+    `  - 再梳理方法和误区`,
+    `- 前后关联`,
+    ...(before.length ? before.map((title) => `  - 前置：${title}`) : ['  - 前置：回看本章核心概念']),
+    `  - 当前：${section.title}`,
+    ...(after.length ? after.map((title) => `  - 后续：${title}`) : ['  - 后续：进入章节小测']),
+    `- 练习观察`,
+    `  - 能否说清为什么`,
+    `  - 能否独立做一道相邻题`,
+    `  - 能否指出易错条件`,
+  ].join('\n');
+}
+
+function V29LearningMapPanel({
+  scopeLabel,
+  abilityProfile,
+  mindMapMarkdown,
+  mindMapFallbackMarkdown,
+  mindMapStreaming,
+  mindMapErr,
+  canGenerate,
+  onGenerate,
+}) {
+  const hasGeneratedMindMap = !!String(mindMapMarkdown || '').trim();
+  const displayMindMap = hasGeneratedMindMap ? mindMapMarkdown : mindMapFallbackMarkdown;
+  const hasDisplayMindMap = !!String(displayMindMap || '').trim();
+  const showMindMap = hasDisplayMindMap || mindMapStreaming;
+
+  return (
+    <div className={`dp2-map-workspace ${showMindMap ? 'has-mindmap' : ''}`}>
+      <div className="dp2-map-toolbar">
+        <span>{scopeLabel || '先选一个小节'}</span>
+        <button type="button" onClick={onGenerate} disabled={!canGenerate || mindMapStreaming}>
+          {mindMapStreaming ? '生成中' : hasGeneratedMindMap ? '刷新导图' : '生成导图'}
+        </button>
+      </div>
+      <section className="dp2-map-base" aria-label="学习能力图">
+        <div className="dp2-map-panel-head">
+          <span>学习能力图</span>
+          <small>轮廓变化</small>
+        </div>
+        <V29LearningMap profile={abilityProfile} />
+      </section>
+      <section className="dp2-map-insight" aria-label="当前小节思维导图">
+        <div className="dp2-map-panel-head">
+          <span>知识导图</span>
+          <small>{hasGeneratedMindMap ? '生成结构' : hasDisplayMindMap ? '本地结构' : '待生成'}</small>
+        </div>
+        <V29InlineMindMap markdown={displayMindMap} streaming={mindMapStreaming} compact />
+      </section>
+      {mindMapErr && <p className="dp2-map-error">{mindMapErr}</p>}
+    </div>
+  );
+}
+
+function V29ResourceWorkspace({
+  apiBase,
+  username,
+  subject,
+  chapterId,
+  sectionId,
+  scopeLabel,
+  onBack,
+  onMindMapReady,
+}) {
   const [overview, setOverview] = useState(null);
   const [activeKey, setActiveKey] = useState(v29ResourceModes[0][0]);
-  const [streamText, setStreamText] = useState('');
-  const [streamErr, setStreamErr] = useState('');
-  const [streaming, setStreaming] = useState(false);
+  const [resourceDrafts, setResourceDrafts] = useState({});
+  const [streamingKey, setStreamingKey] = useState('');
   const abortRef = useRef(null);
 
   useEffect(() => {
@@ -529,22 +904,38 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
 
   const resourceEntries = useMemo(() => {
     const apiTypes = overview?.resource_types;
-    const fallback = v29ResourceModes.map(([key, title, desc, tone]) => ({ key, title, desc, tone }));
+    const fallback = v29ResourceModes
+      .filter(([key]) => !MATERIAL_RESOURCE_EXCLUDE.has(key))
+      .map(([key, title, desc, tone]) => ({ key, title, desc, tone }));
     if (!apiTypes || typeof apiTypes !== 'object') return fallback;
 
     const toneByKey = Object.fromEntries(v29ResourceModes.map(([key, , , tone]) => [key, tone]));
     const descByKey = Object.fromEntries(v29ResourceModes.map(([key, , desc]) => [key, desc]));
-    const list = Object.entries(apiTypes).map(([key, value]) => ({
-      key,
-      title: value?.title || fallback.find((x) => x.key === key)?.title || key,
-      desc: value?.agent_chain || descByKey[key] || '按当前小节整理一份顺手材料。',
-      tone: toneByKey[key] || 'warm',
-    }));
+    const list = Object.entries(apiTypes)
+      .filter(([key]) => !MATERIAL_RESOURCE_EXCLUDE.has(key))
+      .map(([key, value]) => ({
+        key,
+        title: value?.title || fallback.find((x) => x.key === key)?.title || key,
+        desc: descByKey[key] || '按当前小节整理一份顺手材料。',
+        tone: toneByKey[key] || 'warm',
+      }));
 
     return list.length ? list : fallback;
   }, [overview]);
 
+  useEffect(() => {
+    if (!resourceEntries.length) return;
+    if (!resourceEntries.some((entry) => entry.key === activeKey)) {
+      setActiveKey(resourceEntries[0].key);
+    }
+  }, [resourceEntries, activeKey]);
+
   const activeEntry = resourceEntries.find((x) => x.key === activeKey) || resourceEntries[0];
+  const activeDraft = resourceDrafts[activeEntry?.key] || { text: '', err: '' };
+  const streamText = activeDraft.text || '';
+  const streamErr = activeDraft.err || '';
+  const streaming = !!streamingKey;
+  const activeStreaming = streamingKey === activeEntry?.key;
   const streamDisplay = useMemo(() => decodeResourceMarkdownStream(streamText), [streamText]);
   const canGenerate = !!(chapterId && sectionId && activeEntry?.key);
 
@@ -552,11 +943,10 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
     const nextKey = key || activeEntry?.key;
     if (!nextKey) return;
     setActiveKey(nextKey);
-    setStreamErr('');
-    setStreamText('');
+    setResourceDrafts((prev) => ({ ...prev, [nextKey]: { text: '', err: '' } }));
 
     if (!chapterId || !sectionId) {
-      setStreamErr('先选一个小节，我才能为它准备材料。');
+      setResourceDrafts((prev) => ({ ...prev, [nextKey]: { text: '', err: '先选一个小节，我才能为它准备材料。' } }));
       return;
     }
 
@@ -568,7 +958,7 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
 
     const ac = new AbortController();
     abortRef.current = ac;
-    setStreaming(true);
+    setStreamingKey(nextKey);
 
     try {
       const r = await fetch(`${apiBase}/learning/studio/resources/stream`, {
@@ -605,90 +995,129 @@ function V29ResourceWorkspace({ apiBase, username, subject, chapterId, sectionId
         const { done, value } = await reader.read();
         if (done) break;
         acc += decoder.decode(value, { stream: true });
-        setStreamText(acc);
+        setResourceDrafts((prev) => ({ ...prev, [nextKey]: { text: acc, err: '' } }));
       }
 
       acc += decoder.decode();
-      setStreamText(acc);
+      setResourceDrafts((prev) => ({ ...prev, [nextKey]: { text: acc, err: '' } }));
+      if (nextKey === 'mind_map') onMindMapReady?.(decodeResourceMarkdownStream(acc));
     } catch (e) {
-      if (e?.name !== 'AbortError') setStreamErr(e?.message || '材料准备失败，请稍后再试。');
+      if (e?.name !== 'AbortError') {
+        setResourceDrafts((prev) => ({
+          ...prev,
+          [nextKey]: { text: '', err: e?.message || '材料准备失败，请稍后再试。' },
+        }));
+      }
     } finally {
-      setStreaming(false);
+      setStreamingKey((current) => (current === nextKey ? '' : current));
     }
+  };
+
+  const clearActiveResource = () => {
+    if (!activeEntry?.key) return;
+    setResourceDrafts((prev) => ({ ...prev, [activeEntry.key]: { text: '', err: '' } }));
   };
 
   return (
     <V29PageShell variant="resources">
       <div className="dp2-resources">
-        <section className="dp2-section-title">
-          <div className="dp2-mini-label">MATERIALS</div>
-          <h2>学习素材</h2>
-          <p>{scopeLabel ? `正在把「${scopeLabel}」整理成可带走的材料` : '先回到学习页点亮一个小节。'}</p>
-          <div className="dp2-actions">
-              <V29Button quiet onClick={onBack}>回到学习</V29Button>
-          </div>
-        </section>
+        <div className="dp2-resource-toolbar">
+          <button type="button" className="dp2-resource-back" onClick={onBack}>
+            <span aria-hidden>←</span>
+            <b>回到学习</b>
+          </button>
+          <section className="dp2-resource-title" aria-label="当前素材范围">
+            <p>{scopeLabel ? `正在把「${scopeLabel}」整理成可带走的材料` : '先回到学习页点亮一个小节。'}</p>
+          </section>
+        </div>
 
-        <section className="dp2-resource-panel">
-          <div className="dp2-resource-modes">
-            {resourceEntries.map((entry, index) => (
-              <button
-                key={entry.key}
-                className={`dp2-resource-mode is-${entry.tone} ${entry.key === activeEntry?.key ? 'is-active' : ''}`}
-                type="button"
-                style={{ animationDelay: `${index * 70}ms` }}
-                aria-pressed={entry.key === activeEntry?.key}
-                onClick={() => setActiveKey(entry.key)}
-              >
-                <span>{entry.title}</span>
-                <small>{entry.desc}</small>
-              </button>
-            ))}
-          </div>
-
-          <div className="dp2-resource-output">
-            <span>{streaming ? 'ARRANGING' : 'PREVIEW'}</span>
-            <h3>{activeEntry?.title || '小节素材'}</h3>
-            {streamErr ? (
-              <p>{streamErr}</p>
-            ) : streamText ? (
-              <div className="dp2-resource-markdown dp2-answer">
-                <ReactMarkdown
-                  remarkPlugins={markdownRemarkPlugins}
-                  rehypePlugins={markdownRehypePlugins}
-                  components={{
-                    code({ inline, className, children }) {
-                      const match = /language-(\w+)/.exec(className || '');
-                      return !inline && match ? (
-                        <CodeBlock language={match[1]} value={String(children).replace(/\n$/, '')} />
-                      ) : (
-                        <code>{children}</code>
-                      );
-                    },
-                  }}
+        <div className="dp2-resource-layout">
+          <aside className="dp2-resource-controls">
+            <nav className="dp2-resource-modes" aria-label="学习素材类型">
+              {resourceEntries.map((entry, index) => (
+                <button
+                  key={entry.key}
+                  className={`dp2-resource-mode is-${entry.tone} ${entry.key === activeEntry?.key ? 'is-active' : ''}`}
+                  type="button"
+                  style={{ animationDelay: `${index * 70}ms` }}
+                  aria-pressed={entry.key === activeEntry?.key}
+                  onClick={() => setActiveKey(entry.key)}
                 >
-                  {normalizeMathText(streamDisplay)}
-                </ReactMarkdown>
-              </div>
-            ) : (
-              <>
-                <p>{canGenerate ? '选一种形式，我把这一节整理成更顺手的材料。' : '还没有选中小节，先回学习页点一下目录。'}</p>
-                <div className="dp2-resource-lines" aria-hidden>
-                  <i />
-                  <i />
-                  <i />
-                  <i />
-                </div>
-              </>
-            )}
-            <div className="dp2-actions">
+                  <span>{entry.title}</span>
+                  <small>{entry.desc}</small>
+                </button>
+              ))}
+            </nav>
+            <div className="dp2-resource-actions dp2-actions">
               <V29Button onClick={() => void startResource()} disabled={streaming || !canGenerate}>
-                {streaming ? '整理中' : '开始整理'}
+                {activeStreaming ? '整理中' : '开始整理'}
               </V29Button>
-              <V29Button quiet onClick={() => setStreamText('')} disabled={streaming || !streamText}>清空</V29Button>
+              <V29Button
+                quiet
+                onClick={clearActiveResource}
+                disabled={streaming || (!streamText && !streamErr)}
+              >
+                清空
+              </V29Button>
             </div>
-          </div>
-        </section>
+          </aside>
+
+          <section className="dp2-resource-panel">
+            <div className="dp2-resource-output">
+              <div className="dp2-resource-output-head">
+                <div>
+                  <span>{activeStreaming ? 'ARRANGING' : streamText ? 'READY' : 'PREVIEW'}</span>
+                  <h3>{activeEntry?.title || '小节素材'}</h3>
+                </div>
+              </div>
+              {streamErr ? (
+                <p>{streamErr}</p>
+              ) : streamText ? (
+                activeEntry?.key === 'mind_map' ? (
+                  <div className="dp2-resource-mindmap">
+                    <V29InlineMindMap markdown={streamDisplay} streaming={streaming} />
+                    <p>导图已附加到学习页左侧，学习能力图会继续保留。回到学习后可以对照当前小节查看。</p>
+                  </div>
+                ) : activeEntry?.key === 'extended_reading' ? (
+                  <V29ExtendedReadingView markdown={streamDisplay} />
+                ) : activeEntry?.key === 'code_lab' ? (
+                  <V29CodeResourceView markdown={streamDisplay} />
+                ) : activeEntry?.key === 'video_script' ? (
+                  <V29VideoScriptView markdown={streamDisplay} streaming={activeStreaming} />
+                ) : (
+                  <div className="dp2-resource-markdown dp2-answer">
+                    <ReactMarkdown
+                      remarkPlugins={markdownRemarkPlugins}
+                      rehypePlugins={markdownRehypePlugins}
+                      components={{
+                        code({ inline, className, children }) {
+                          const match = /language-(\w+)/.exec(className || '');
+                          return !inline && match ? (
+                            <CodeBlock language={match[1]} value={String(children).replace(/\n$/, '')} />
+                          ) : (
+                            <code>{children}</code>
+                          );
+                        },
+                      }}
+                    >
+                      {normalizeMathText(streamDisplay)}
+                    </ReactMarkdown>
+                  </div>
+                )
+              ) : (
+                <>
+                  <p>{canGenerate ? '选一种形式，我把这一节整理成更顺手的材料。' : '还没有选中小节，先回学习页点一下目录。'}</p>
+                  <div className="dp2-resource-lines" aria-hidden>
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                  </div>
+                </>
+              )}
+            </div>
+          </section>
+        </div>
       </div>
     </V29PageShell>
   );
@@ -1939,60 +2368,137 @@ const SubjectGridV29 = ({ onSelectSubject, onLogout, username, apiBase }) => {
   );
 };
 
-const SubjectGridExactV29 = ({ onSelectSubject, onSwitchAccount, username }) => (
-  <V29PageShell variant="board">
-    <div className="dp2-board">
-      <section className="dp2-section-title">
-        <div className="dp2-mini-label">MAP</div>
-        <h2>学习地图</h2>
-        <p>先选一条主线，再决定让 AI 陪你走，还是自己随手问。</p>
-        <div className="dp2-board-actions">
-          <span>{username || 'Learning Field'}</span>
-          <button type="button" onClick={onSwitchAccount}>
-            切换账号
-          </button>
-        </div>
-      </section>
-      <section className="dp2-subject-list" aria-label="课程选择">
-        {v29Subjects.map(([title, topic, state, progress], index) => (
-          <article
-            key={title}
-            className={`dp2-subject is-${state}`}
-            style={{ '--p': `${progress}%`, animationDelay: `${index * 55}ms` }}
-          >
-            <span className="dp2-course-no">{String(index + 1).padStart(2, '0')}</span>
-            <span className="dp2-course-body">
-              <span className="dp2-course-main">
-                <span className="dp2-course-kicker">{v29CourseShowcase[index][0]}</span>
-                <strong>{title}</strong>
+const SubjectGridExactV29 = ({ onSelectSubject, onSwitchAccount, username, apiBase = API_BASE }) => {
+  const [remoteCourses, setRemoteCourses] = useState([]);
+  const [courseErr, setCourseErr] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setCourseErr('');
+        const r = await fetch(`${apiBase}/courses`);
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(formatApiDetail(data) || data?.detail || '课程列表暂时不可用');
+        if (!cancelled) setRemoteCourses(Array.isArray(data.courses) ? data.courses : []);
+      } catch (e) {
+        if (!cancelled) {
+          setCourseErr(e?.message || '课程列表暂时不可用');
+          setRemoteCourses([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase]);
+
+  const subjects = useMemo(() => {
+    const fallback = v29Subjects.map(([title, topic, state, progress], index) => ({
+      id: title,
+      name: title,
+      lead: v29CourseShowcase[index]?.[0] || 'COURSE',
+      topic: `${topic} / ${v29CourseShowcase[index]?.[1] || '学习主线'}`,
+      state,
+      progress,
+      status: state === 'active' ? '正在学习' : state === 'ready' ? '可进入' : '待开启',
+      desc: v29CourseShowcase[index]?.[2] || '从一个清晰问题开始。',
+    }));
+    if (!remoteCourses.length) return fallback;
+    return remoteCourses.map((course, index) => {
+      const base = fallback[index % fallback.length];
+      const firstTopic = course.first_section_title || course.first_chapter_title || base.topic;
+      return {
+        id: course.id || course.name,
+        name: course.name,
+        lead: v29CourseShowcase[index % v29CourseShowcase.length]?.[0] || base.lead,
+        topic: firstTopic,
+        state: index === 0 ? 'active' : index < 3 ? 'ready' : 'next',
+        progress: base.progress,
+        status: index === 0 ? '正在学习' : '可进入',
+        desc: course.description || base.desc,
+      };
+    });
+  }, [remoteCourses]);
+
+  return (
+    <V29PageShell variant="board">
+      <div className="dp2-board">
+        <section className="dp2-section-title">
+          <div className="dp2-mini-label">MAP</div>
+          <h2>学习地图</h2>
+          <p>选一条主线，再决定让 AI 陪你走，还是自由提问。</p>
+          <div className="dp2-board-actions">
+            <span>{courseErr || username || 'Learning Field'}</span>
+            <button type="button" className="dp2-switch-account" onClick={onSwitchAccount}>
+              切换账号
+            </button>
+          </div>
+        </section>
+        <section className="dp2-subject-list" aria-label="课程选择">
+          {subjects.map((course, index) => (
+            <article
+              key={course.id || course.name}
+              className={`dp2-subject is-${course.state}`}
+              style={{ '--p': `${course.progress}%`, animationDelay: `${index * 55}ms` }}
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelectSubject(course.name, 'guided')}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onSelectSubject(course.name, 'guided');
+                }
+              }}
+            >
+              <span className="dp2-course-no">{String(index + 1).padStart(2, '0')}</span>
+              <span className="dp2-course-body">
+                <span className="dp2-course-main">
+                  <span className="dp2-course-kicker">{course.lead}</span>
+                  <strong>{course.name}</strong>
+                </span>
+                <span className="dp2-course-subline">
+                  <span className="dp2-course-topic">{course.topic}</span>
+                  <span>{course.status}</span>
+                  <small>{course.desc}</small>
+                </span>
               </span>
-              <span className="dp2-course-subline">
-                <span className="dp2-course-topic">{topic} / {v29CourseShowcase[index][1]}</span>
-                <span>{state === 'active' ? '正在探索' : state === 'ready' ? '可以进入' : '稍后再看'}</span>
-                <small>{v29CourseShowcase[index][2]}</small>
+              <span className="dp2-course-mode-row" aria-label={`${course.name} 学习模式`}>
+                <button
+                  type="button"
+                  className="dp2-course-mode is-guided"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSelectSubject(course.name, 'guided');
+                  }}
+                >
+                  AI 带学
+                </button>
+                <button
+                  type="button"
+                  className="dp2-course-mode"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSelectSubject(course.name, 'free');
+                  }}
+                >
+                  自由提问
+                </button>
               </span>
-            </span>
-            <span className="dp2-course-mode-row" aria-label={`${title} 学习模式`}>
-              <button type="button" className="dp2-course-mode is-guided" onClick={() => onSelectSubject(title, 'guided')}>
-                AI 带学
-              </button>
-              <button type="button" className="dp2-course-mode" onClick={() => onSelectSubject(title, 'free')}>
-                自由提问
-              </button>
-            </span>
-            <span className="dp2-course-mark" aria-hidden>
-              <span />
-              <b />
-            </span>
-            <i className="dp2-course-line" aria-label={`${title} 进度`}>
-              <b />
-            </i>
-          </article>
-        ))}
-      </section>
-    </div>
-  </V29PageShell>
-);
+              <span className="dp2-course-mark" aria-hidden>
+                <span />
+                <b />
+              </span>
+              <i className="dp2-course-line" aria-label={`${course.name} 进度`}>
+                <b />
+              </i>
+            </article>
+          ))}
+        </section>
+      </div>
+    </V29PageShell>
+  );
+};
 
 // --- 3. 对话界面：会话列表 + 章节目录（大章 / 小节，数据来自后端 /learning-catalog）---
 const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'free' }) => {
@@ -2024,6 +2530,9 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
   const [learnMode, setLearnMode] = useState(initialMode === 'guided');
   const [quizModal, setQuizModal] = useState(null);
   const [chapterPanelWidth] = useState(380);
+  const [mindMapMarkdown, setMindMapMarkdown] = useState('');
+  const [mindMapStreaming, setMindMapStreaming] = useState(false);
+  const [mindMapErr, setMindMapErr] = useState('');
 
   const messagesEndRef = useRef(null);
   const dialogueScrollRef = useRef(null);
@@ -2036,6 +2545,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
   const rafRef = useRef(null);
   const readerRef = useRef(null);
   const quizStripRef = useRef(null);
+  const mindMapAbortRef = useRef(null);
   const guidedAutoStartedRef = useRef(false);
   /** 刚流式输出完的会话 id：在此 id 的历史尚未可查时不要用「空历史 → 欢迎页」覆盖界面 */
   const preferUiOverHistoryUntilRef = useRef(null);
@@ -2087,6 +2597,9 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
       if (outputStartScrollFrameRef.current) cancelAnimationFrame(outputStartScrollFrameRef.current);
       try {
         readerRef.current?.cancel?.();
+      } catch {}
+      try {
+        mindMapAbortRef.current?.abort?.();
       } catch {}
     };
   }, []);
@@ -2227,6 +2740,9 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     setLearnMode(initialMode === 'guided');
     setQuizModal(null);
     setProgress({ sections: {}, chapters: {}, sectionRule: null });
+    setMindMapMarkdown('');
+    setMindMapStreaming(false);
+    setMindMapErr('');
     setChapterRightTab('catalog');
     setStudioPanel('study');
     guidedAutoStartedRef.current = false;
@@ -2312,6 +2828,120 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
   const sectionMasteryTarget = Math.round(Number(sectionRule.mastery_threshold ?? 0.72) * 100);
   const sectionForceTurns = Number(sectionRule.force_quiz_turns ?? 6);
   const canPrepareSmallQuiz = !!selectedChapterId && !!selectedSectionId && !currentSectionProgress?.small_quiz_passed;
+  const selectedChapter = useMemo(
+    () => catalog.find((chapter) => chapter.id === selectedChapterId) || null,
+    [catalog, selectedChapterId]
+  );
+  const selectedSection = useMemo(
+    () => selectedChapter?.sections?.find((section) => section.id === selectedSectionId) || null,
+    [selectedChapter, selectedSectionId]
+  );
+  const abilityProfile = useMemo(() => {
+    const sections = Object.values(progress.sections || {});
+    const activeCount = sections.filter((x) => x?.learn_turns || x?.small_quiz_passed).length;
+    const passedRatio = totalSectionCount ? passedSectionCount / totalSectionCount : 0;
+    const activeRatio = totalSectionCount ? activeCount / totalSectionCount : 0;
+    const mastery = clamp01(currentSectionProgress?.mastery, 0.28);
+    const turnRatio = clamp01(Number(currentSectionProgress?.learn_turns || 0) / Math.max(1, sectionForceTurns), 0.2);
+    const quizSignal = currentSectionProgress?.small_quiz_passed
+      ? 0.88
+      : currentSectionProgress?.quiz_pending
+        ? 0.62
+        : 0.34;
+    return {
+      foundation: Math.max(0.3, mastery * 0.82 + activeRatio * 0.18),
+      reasoning: Math.max(0.28, mastery * 0.55 + turnRatio * 0.3 + passedRatio * 0.15),
+      expression: Math.max(0.26, turnRatio * 0.56 + mastery * 0.26 + activeRatio * 0.18),
+      transfer: Math.max(0.24, passedRatio * 0.58 + quizSignal * 0.24 + mastery * 0.18),
+      review: Math.max(0.3, quizSignal * 0.46 + turnRatio * 0.3 + passedRatio * 0.24),
+    };
+  }, [currentSectionProgress, passedSectionCount, progress.sections, sectionForceTurns, totalSectionCount]);
+  const mindMapFallbackMarkdown = useMemo(
+    () =>
+      buildSectionMindMapFallback({
+        subject,
+        chapter: selectedChapter,
+        section: selectedSection,
+        progressState: currentSectionProgress,
+      }),
+    [subject, selectedChapter, selectedSection, currentSectionProgress]
+  );
+
+  useEffect(() => {
+    try {
+      mindMapAbortRef.current?.abort?.();
+    } catch {
+      /* ignore */
+    }
+    setMindMapMarkdown('');
+    setMindMapErr('');
+    setMindMapStreaming(false);
+  }, [sessionScopeKey]);
+
+  const generateMindMap = async () => {
+    if (!selectedChapterId || !selectedSectionId) {
+      setMindMapErr('先在右侧目录点亮一个小节，再生成它的知识图。');
+      return;
+    }
+    try {
+      mindMapAbortRef.current?.abort?.();
+    } catch {
+      /* ignore */
+    }
+
+    const ac = new AbortController();
+    mindMapAbortRef.current = ac;
+    setMindMapErr('');
+    setMindMapMarkdown('');
+    setMindMapStreaming(true);
+
+    try {
+      const r = await fetch(`${API_BASE}/learning/studio/resources/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ac.signal,
+        body: JSON.stringify({
+          username,
+          subject,
+          chapter_id: selectedChapterId,
+          section_id: selectedSectionId,
+          resource_type: 'mind_map',
+          extra_hint: '请严格输出一个 Mermaid mindmap 代码块，根节点是当前小节标题；节点短、层级清楚，只保留核心定义、方法、误区和练习观察。',
+        }),
+      });
+
+      if (!r.ok) {
+        const t = await r.text().catch(() => '');
+        let detail = t;
+        try {
+          const j = JSON.parse(t);
+          detail = formatApiDetail(j) || t;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail || `HTTP ${r.status}`);
+      }
+      if (!r.body) throw new Error('没有收到导图内容。');
+
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let acc = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        acc += decoder.decode(value, { stream: true });
+      }
+      acc += decoder.decode();
+      const decoded = decodeResourceMarkdownStream(acc);
+      setMindMapMarkdown(markdownToMarkmapOutline(decoded) ? decoded : mindMapFallbackMarkdown);
+    } catch (e) {
+      if (e?.name !== 'AbortError') {
+        setMindMapErr(e?.message || '导图生成失败，请稍后再试。');
+      }
+    } finally {
+      setMindMapStreaming(false);
+    }
+  };
 
   const applySessionChapter = (raw) => {
     if (!raw || !catalog.length) return;
@@ -3085,6 +3715,10 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         sectionId={selectedSectionId}
         scopeLabel={scopeLabel}
         onBack={() => setStudioPanel('study')}
+        onMindMapReady={(markdown) => {
+          setMindMapErr('');
+          setMindMapMarkdown(markdown || '');
+        }}
       />
     );
   }
@@ -3094,9 +3728,18 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
       <div className="dp2-studio">
         <aside className="dp2-portrait">
           <div className="dp2-mini-label">TRACE</div>
-          <h2>学习星图</h2>
-          <p>每一次提问，都会让这张图多亮一点。</p>
-          <V29LearningMap />
+          <h2>学习能力图</h2>
+          <p>用图形观察理解、推理和复盘的变化。</p>
+          <V29LearningMapPanel
+            scopeLabel={scopeLabel}
+            abilityProfile={abilityProfile}
+            mindMapMarkdown={mindMapMarkdown}
+            mindMapFallbackMarkdown={mindMapFallbackMarkdown}
+            mindMapStreaming={mindMapStreaming}
+            mindMapErr={mindMapErr}
+            canGenerate={!!selectedChapterId && !!selectedSectionId}
+            onGenerate={() => void generateMindMap()}
+          />
         </aside>
 
         <main className="dp2-chat">

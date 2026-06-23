@@ -27,6 +27,27 @@ AGENT_MANIFEST: List[Dict[str, Any]] = [
         "outputs": ["markdown_or_mermaid"],
     },
     {
+        "id": "search",
+        "name": "联网检索与来源筛选智能体",
+        "role": "为拓展阅读检索可核验来源，保留标题、链接和摘要，过滤搜索页与泛化首页",
+        "inputs": ["当前小节", "课程关键词", "教材摘要"],
+        "outputs": ["source_cards"],
+    },
+    {
+        "id": "editor",
+        "name": "学习文档编辑智能体",
+        "role": "把精讲文档整理成目标、核心概念、例题、误区、检查清单的稳定结构",
+        "inputs": ["课程资料摘录", "当前小节", "学习目标"],
+        "outputs": ["polished_markdown"],
+    },
+    {
+        "id": "code",
+        "name": "代码实操教练智能体",
+        "role": "把知识点改写成可运行的小实验，补足环境、步骤、完整代码和调试提示",
+        "inputs": ["课程资料摘录", "当前小节", "学生上下文"],
+        "outputs": ["code_workshop_markdown"],
+    },
+    {
         "id": "tutor",
         "name": "苏格拉底导师智能体",
         "role": "流式辅导、附图与公式讲解",
@@ -53,7 +74,7 @@ AGENT_MANIFEST: List[Dict[str, Any]] = [
 RESOURCE_TYPES: Dict[str, Dict[str, str]] = {
     "course_digest": {
         "title": "课程精讲文档",
-        "agent_chain": "guard,resource,path",
+        "agent_chain": "guard,editor,resource,path",
         "instruction": (
             "你是「课程精讲文档」智能体。请输出**仅 Markdown**（中文），结构包含："
             "学习目标、核心概念表、关键公式（LaTeX）、例题与易错点、自测要点。"
@@ -85,7 +106,7 @@ RESOURCE_TYPES: Dict[str, Dict[str, str]] = {
     },
     "extended_reading": {
         "title": "拓展阅读材料",
-        "agent_chain": "guard,resource",
+        "agent_chain": "guard,search,resource",
         "instruction": (
             "你是「拓展阅读」智能体。请输出**仅 Markdown 中文正文**，必须紧扣【当前范围】与【资料】里的概念、方法、符号或应用场景展开，"
             "推荐 2~4 条延伸方向；每条含小标题、与正课对齐的阐述（每条约 180～280 字）、与本节知识点的具体衔接。"
@@ -97,7 +118,7 @@ RESOURCE_TYPES: Dict[str, Dict[str, str]] = {
     },
     "code_lab": {
         "title": "代码实操案例",
-        "agent_chain": "guard,resource",
+        "agent_chain": "guard,code,resource",
         "instruction": (
             "你是「代码实操」智能体。必须输出**标准 Markdown 正文**（## 小标题 + 段落），**禁止**用整段 JSON、"
             "禁止输出 `json { ... }` 或非围栏的伪 JSON 串代替正文。"
@@ -114,6 +135,41 @@ RESOURCE_TYPES: Dict[str, Dict[str, str]] = {
         ),
     },
 }
+
+RESOURCE_TYPES["course_digest"]["instruction"] = (
+    "你是「课程精讲文档编辑智能体」。请输出专业、稳定、可复习的中文 Markdown。"
+    "必须使用以下结构：# 本节精讲、## 先看懂什么、## 概念边界、## 核心方法、## 例题拆解、## 易错点、## 检查清单。"
+    "每段控制在 2~4 句；术语第一次出现时必须用一句人话解释；公式使用标准 LaTeX，禁止把单个字母或符号单独拆行。"
+    "概念边界要说明“它是什么 / 不是什么 / 常见混淆”；例题拆解要写清每一步为什么这样做；检查清单使用 3~5 条可执行动作。"
+    "严格依据【资料】和【当前范围】，不得编造课外结论、URL、书名或论文。"
+)
+
+RESOURCE_TYPES["extended_reading"]["instruction"] = (
+    "你是「联网拓展阅读智能体」。请输出中文 Markdown，基于【资料】解释本节如何向外延伸，并且必须使用【联网检索结果】中的来源。"
+    "结构固定为：# 拓展阅读、## 信息来源、## 本节可以继续看什么、## 阅读路线。"
+    "请先说明本次参考了哪些来源，再基于来源和课程资料拓展。"
+    "阅读路线给 2~4 个方向；每个方向包含：为什么值得看、和本节哪一个概念相连、读的时候先抓什么。"
+    "## 信息来源 中只允许使用【联网检索结果】里的 URL，格式为 `- [标题](URL) —— 来源与用途`。"
+    "如果【联网检索结果】为空，必须明确写“本次未取得可核验联网来源”，只基于【资料】给关键词和阅读方向，不得编造 URL、DOI 或来源。"
+)
+
+RESOURCE_TYPES["code_lab"]["instruction"] = (
+    "你是「代码实操教练智能体」。请输出标准 Markdown，不要输出整段 JSON，也不要用伪 JSON 代替正文。"
+    "结构固定为：# 代码实操、## 任务目标、## 最小环境、## 输入输出、## 实现思路、## 完整代码、## 运行方式、## 常见错误、## 改造挑战。"
+    "完整代码必须放在 fenced code block 中并标注语言；优先使用 Python 标准库或课程主题最贴合的轻量实现，不引入无关大型依赖。"
+    "代码必须可运行、变量命名清楚、边界条件明确；常见错误要写出报错现象、原因和修复方式。"
+    "案例必须紧扣【当前范围】与【资料】，不能跳到无关项目。"
+)
+
+RESOURCE_TYPES["video_script"]["instruction"] = (
+    "你是「微课视频脚本导演智能体」。请输出标准 Markdown，不要寒暄。"
+    "结构固定为：# 微课脚本、## 开场、## 分镜脚本、## 收束复盘。"
+    "## 分镜脚本下至少给 5 个镜头，每个镜头必须使用 `### 镜头 N：短标题`，并包含："
+    "画面/板书要点、口播稿、时长建议。"
+    "口播稿要像真实讲给学生听，少术语；必须出现术语时立刻用一句人话解释。"
+    "整段适合 3~6 分钟录制，镜头之间要有过渡，不要把单个字母、公式符号拆成单独一行。"
+    "必须紧扣【当前范围】与【资料】，不得编造无关案例。"
+)
 
 PORTRAIT_DIMENSION_KEYS = [
     "知识基础",
