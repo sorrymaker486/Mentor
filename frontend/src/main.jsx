@@ -1,5 +1,6 @@
 import { Component, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { BrowserRouter } from 'react-router-dom'
 
 import '@fontsource/outfit/300.css'
 import '@fontsource/outfit/400.css'
@@ -67,8 +68,10 @@ class RootErrorBoundary extends Component {
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <RootErrorBoundary>
-      <App />
-    </RootErrorBoundary>
+    <BrowserRouter>
+      <RootErrorBoundary>
+        <App />
+      </RootErrorBoundary>
+    </BrowserRouter>
   </StrictMode>,
 )

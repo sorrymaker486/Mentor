@@ -7,6 +7,7 @@ import {
   PracticePackQuizWindow,
   VideoScriptBoardWindow,
 } from './StudioResourceModals';
+import { assessmentWeakPointsFromResult } from '../utils/assessmentUtils';
 import { decodeResourceMarkdownStream } from '../utils/resourceStreamDecode';
 
 const formatApiDetail = (data) => {
@@ -19,6 +20,14 @@ const formatApiDetail = (data) => {
   }
   if (d && typeof d === 'object') return JSON.stringify(d);
   return '';
+};
+
+const STUDIO_RESOURCE_LABELS = {
+  course_digest: '精讲文档',
+  practice_pack: '练习包',
+  extended_reading: '拓展阅读',
+  code_lab: '代码实操',
+  video_script: '视频脚本',
 };
 
 /** 与后端 PORTRAIT_DIMENSION_KEYS 顺序一致，保证雷达顶点稳定 */
@@ -70,7 +79,7 @@ function PortraitRadarChart({ dimensions }) {
     return { x1: cx, y1: cy, x2: p.x, y2: p.y, i };
   });
 
-  const labelR = maxR + 26;
+  const labelR = maxR + 18;
   const labels = PORTRAIT_AXIS_ORDER.map((key, i) => {
     const ang = -Math.PI / 2 + (2 * Math.PI * i) / n;
     return {
@@ -84,8 +93,9 @@ function PortraitRadarChart({ dimensions }) {
   return (
     <div className="flex w-full flex-col items-center gap-3">
       <svg
-        viewBox="0 0 200 200"
+        viewBox="-10 -10 220 220"
         className="h-[168px] w-[168px] shrink-0 text-[#1a1f24]/55"
+        style={{ overflow: 'visible' }}
         role="img"
         aria-label="六维学习画像雷达图"
       >
@@ -481,6 +491,10 @@ export function StudioPathPanel({ apiBase, username, subject, progressSignal = '
         {steps.map((s, i) => {
           const focus = focusIdx === i;
           const done = s.status === 'done';
+          const weakPoints = Array.isArray(s.weak_points) ? s.weak_points : [];
+          const evidence = Array.isArray(s.evidence) ? s.evidence : [];
+          const resourceLabel = STUDIO_RESOURCE_LABELS[s.recommended_resource] || '';
+          const reason = s.recommended_reason || weakPoints[0]?.reason || '';
           return (
             <li
               key={`${s.chapter_id}-${s.section_id}-${i}`}
@@ -496,6 +510,26 @@ export function StudioPathPanel({ apiBase, username, subject, progressSignal = '
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium leading-tight text-[#1a1f24]">{s.section_title || s.section_id}</div>
                 <div className="truncate text-[10px] text-[#1a1f24]/40">{s.chapter_title}</div>
+                {(resourceLabel || reason || weakPoints.length > 0 || evidence.length > 0) && (
+                  <div className="mt-1.5 min-w-0 space-y-1">
+                    <div className="flex min-w-0 flex-wrap gap-1.5">
+                      {resourceLabel && (
+                        <span className="border-b border-[#b8955c]/25 pb-0.5 text-[9px] font-semibold tracking-[0.1em] text-[#8b6b3f]/75">
+                          {resourceLabel}
+                        </span>
+                      )}
+                      {weakPoints.length > 0 && (
+                        <span className="border-b border-[#8ea6b0]/25 pb-0.5 text-[9px] font-semibold tracking-[0.1em] text-[#5d777a]/70">
+                          需要回看
+                        </span>
+                      )}
+                    </div>
+                    {reason && <p className="line-clamp-2 text-[10px] leading-relaxed text-[#8b6b3f]/70">{reason}</p>}
+                    {evidence.length > 0 && (
+                      <p className="truncate text-[9px] text-[#1a1f24]/38">依据：{String(evidence[0]).slice(0, 48)}</p>
+                    )}
+                  </div>
+                )}
               </div>
               <span
                 className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold ${
@@ -516,17 +550,29 @@ const MATERIAL_RESOURCE_EXCLUDE = new Set(['mind_map']);
 const LIVE_WINDOW_TYPES = new Set(['course_digest', 'extended_reading', 'code_lab', 'video_script']);
 
 /** 对话页右侧：按小节生成资源；按类型进入可缩放弹窗 / 导图 / 答题 / 外链 / 导演板等 */
-export function StudioResourcePanel({ apiBase, username, subject, chapterId, sectionId, scopeLabel }) {
+export function StudioResourcePanel({
+  apiBase,
+  username,
+  subject,
+  chapterId,
+  sectionId,
+  scopeLabel,
+  learningInsightHint,
+  recommendedResourceKey = '',
+  onResourceFinished,
+  onPracticeResult,
+}) {
   const [overview, setOverview] = useState(null);
   const [hint, setHint] = useState('');
   const [activeKey, setActiveKey] = useState(null);
   const [streamText, setStreamText] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [streamErr, setStreamErr] = useState('');
+  const [savedByType, setSavedByType] = useState({});
   const [win, setWin] = useState(null);
+  const [practiceScope, setPracticeScope] = useState(null);
   const abortRef = useRef(null);
-
-  const streamDisplay = useMemo(() => decodeResourceMarkdownStream(streamText), [streamText]);
+  const recommendedAppliedRef = useRef('');
 
   useEffect(() => {
     let cancelled = false;
@@ -558,12 +604,78 @@ export function StudioResourcePanel({ apiBase, username, subject, chapterId, sec
 
   const canGen = !!(chapterId && sectionId);
   const selectedEntry = resourceEntries.find((x) => x.key === activeKey) || resourceEntries[0] || null;
+  const savedText = activeKey ? savedByType[activeKey]?.content || '' : '';
+  const displayText = streamText || savedText;
+  const streamDisplay = useMemo(() => decodeResourceMarkdownStream(displayText), [displayText]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSavedByType({});
+    setStreamText('');
+    setStreamErr('');
+    setWin(null);
+    recommendedAppliedRef.current = '';
+    if (!username || !subject || !chapterId || !sectionId) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    (async () => {
+      try {
+        const r = await fetch(
+          `${apiBase}/learning/studio/resources?username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}&chapter_id=${encodeURIComponent(chapterId)}&section_id=${encodeURIComponent(sectionId)}`
+        );
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || cancelled) return;
+        setSavedByType(data.resources || {});
+        if (data.resources?.practice_pack) {
+          setPracticeScope({ chapterId, sectionId, scopeLabel: data.scope_label || scopeLabel });
+        }
+      } catch {
+        /* ignore restore errors */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase, username, subject, chapterId, sectionId, scopeLabel]);
+
+  useEffect(() => {
+    if (!recommendedResourceKey || !resourceEntries.length || streaming) return;
+    if (activeKey && (displayText || win)) return;
+    const scopeKey = `${chapterId || ''}|${sectionId || ''}|${recommendedResourceKey}`;
+    if (recommendedAppliedRef.current === scopeKey) return;
+    if (resourceEntries.some((entry) => entry.key === recommendedResourceKey)) {
+      setActiveKey(recommendedResourceKey);
+      recommendedAppliedRef.current = scopeKey;
+    }
+  }, [activeKey, chapterId, sectionId, recommendedResourceKey, resourceEntries, displayText, streaming, win]);
 
   const resetStreamState = () => {
     setStreamText('');
     setStreamErr('');
     setActiveKey(null);
     setWin(null);
+  };
+
+  const openResourceWindow = (resourceType) => {
+    if (resourceType === 'practice_pack') {
+      setPracticeScope({ chapterId, sectionId, scopeLabel });
+      setWin('practice_pack');
+      return;
+    }
+    if (LIVE_WINDOW_TYPES.has(resourceType)) setWin(resourceType);
+  };
+
+  const selectResource = (resourceType) => {
+    setActiveKey(resourceType);
+    setStreamErr('');
+    if (savedByType[resourceType]?.content) {
+      setStreamText('');
+      openResourceWindow(resourceType);
+    }
   };
 
   const startStream = async (resourceType) => {
@@ -575,8 +687,13 @@ export function StudioResourcePanel({ apiBase, username, subject, chapterId, sec
     setStreamText('');
     setActiveKey(resourceType);
     setStreaming(true);
-    if (resourceType === 'practice_pack') setWin(null);
-    else if (LIVE_WINDOW_TYPES.has(resourceType)) setWin(resourceType);
+    if (resourceType === 'practice_pack') {
+      setPracticeScope({ chapterId, sectionId, scopeLabel });
+      setWin(null);
+    } else {
+      setPracticeScope(null);
+      if (LIVE_WINDOW_TYPES.has(resourceType)) setWin(resourceType);
+    }
 
     try {
       abortRef.current?.abort();
@@ -597,7 +714,7 @@ export function StudioResourcePanel({ apiBase, username, subject, chapterId, sec
           chapter_id: chapterId,
           section_id: sectionId,
           resource_type: resourceType,
-          extra_hint: hint.trim(),
+          extra_hint: [learningInsightHint, hint.trim()].filter(Boolean).join('\n'),
         }),
       });
       if (!r.ok) {
@@ -622,7 +739,18 @@ export function StudioResourcePanel({ apiBase, username, subject, chapterId, sec
       }
       acc += dec.decode();
       setStreamText(acc);
+      setSavedByType((prev) => ({
+        ...prev,
+        [resourceType]: {
+          ...(prev[resourceType] || {}),
+          resource_type: resourceType,
+          content: acc,
+          scope_label: scopeLabel,
+          updated_at: new Date().toISOString(),
+        },
+      }));
       ok = true;
+      onResourceFinished?.(resourceType);
     } catch (e) {
       if (e?.name === 'AbortError') {
         setStreamErr('已取消。');
@@ -688,12 +816,18 @@ export function StudioResourcePanel({ apiBase, username, subject, chapterId, sec
             <button
               key={x.key}
               type="button"
-              onClick={() => setActiveKey(x.key)}
+              onClick={() => selectResource(x.key)}
               className={`relative grid min-w-[8.6rem] gap-1 px-0 pb-2 pt-0.5 text-left transition-colors ${
                 selectedEntry?.key === x.key ? 'text-[#1a1f24]' : 'text-[#1a1f24]/48 hover:text-[#1a1f24]/76'
               }`}
             >
               <span className="text-[13px] font-semibold leading-snug">{x.title}</span>
+              {x.key === recommendedResourceKey && (
+                <em className="text-[9px] not-italic tracking-[0.18em] text-[#8a6f42]/85">推荐</em>
+              )}
+              {savedByType[x.key]?.content && (
+                <em className="text-[9px] not-italic tracking-[0.18em] text-[#56747a]/75">已保存</em>
+              )}
               <small className="line-clamp-1 font-mono text-[10px] text-[#1a1f24]/38">{x.chain}</small>
               <i
                 className={`mt-1 h-px w-full bg-gradient-to-r from-[#b8955c]/50 via-[#8ea6b0]/35 to-transparent transition-opacity ${
@@ -770,7 +904,20 @@ export function StudioResourcePanel({ apiBase, username, subject, chapterId, sec
       )}
       {win === 'video_script' && <VideoScriptBoardWindow open rawMarkdown={streamDisplay} onClose={closeModal} />}
       {win === 'practice_pack' && (
-        <PracticePackQuizWindow open={!!streamText} rawMarkdown={streamText} onClose={closeModal} />
+        <PracticePackQuizWindow
+          open={!!displayText}
+          rawMarkdown={displayText}
+          onClose={closeModal}
+          onResult={(result) => {
+            const weak = assessmentWeakPointsFromResult(result, { scopeLabel });
+            return onPracticeResult?.({
+              weak_points: weak,
+              score: result?.score || 0,
+              chapter_id: practiceScope?.chapterId || chapterId,
+              section_id: practiceScope?.sectionId || sectionId,
+            });
+          }}
+        />
       )}
 
       {streaming && activeKey === 'practice_pack' && (

@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip } from 'recharts';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { markdownRemarkPlugins, markdownRehypePlugins } from './markdownMathSetup';
+import { normalizeMathText } from './utils/markdownMathNormalize';
 import HeroTitle from './components/hero-motion/HeroTitle';
 import ParticleField from './components/ParticleField';
 import IntroLoader from './components/IntroLoader';
@@ -15,11 +16,19 @@ import { markdownToMarkmapOutline } from './utils/mindmapOutline';
 import { decodeResourceMarkdownStream } from './utils/resourceStreamDecode';
 import { parseStructuredVideoScript } from './utils/videoScriptParse';
 import {
+  assessmentMarkdownDownload,
+  assessmentTypeLabel,
+  assessmentWeakPointsFromResult,
+  emptyAssessmentAnswer,
+  isAssessmentAnswered,
+} from './utils/assessmentUtils';
+import {
   StudioMentorOverviewModal,
   StudioPortraitCard,
   StudioPathPanel,
   StudioResourcePanel,
 } from './components/LearningStudioBlocks';
+import { PracticePackQuizWindow } from './components/StudioResourceModals';
 import { API_BASE } from './apiConfig';
 import 'katex/dist/katex.min.css';
 
@@ -28,6 +37,23 @@ const sanitizeUsername = (value) =>
   String(value || '')
     .replace(/[^\u3400-\u4DBF\u4E00-\u9FFFA-Za-z0-9_]/g, '')
     .slice(0, 16);
+
+const routeStepFromPath = (pathname, hasUser) => {
+  if (!hasUser) return 'login';
+  if (pathname.startsWith('/study')) return 'chat';
+  if (pathname.startsWith('/courses')) return 'subjects';
+  if (pathname.startsWith('/login')) return 'login';
+  return 'subjects';
+};
+
+const buildStudyPath = ({ subject, mode = 'free', panel = 'study' }) => {
+  const params = new URLSearchParams();
+  if (subject) params.set('subject', subject);
+  if (mode === 'guided') params.set('mode', 'guided');
+  const query = params.toString();
+  const path = panel === 'resources' ? '/study/resources' : '/study';
+  return query ? `${path}?${query}` : path;
+};
 
 // --- 内部组件：代码块 ---
 const CodeBlock = ({ language, value }) => {
@@ -75,141 +101,6 @@ const CodeBlock = ({ language, value }) => {
       </SyntaxHighlighter>
     </div>
   );
-};
-
-// --- 数学公式轻量规范化（不再做「自动包 $」启发式，避免破坏已有 $…$、矩阵与下标等）---
-const normalizeMathText = (text) => {
-  if (!text) return text;
-
-  let t = String(text).replace(/\r\n?/g, '\n').replace(/\u2028|\u2029/g, '\n');
-
-  t = t
-    .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m.trim()}$`)
-    .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `$$${m.trim()}$$`);
-
-  t = t.replace(
-    /`([^`]*?(?:\\frac|\\lim|\\sum|\\int|\\sqrt|\\to|=|\^|_)[^`]*)`/g,
-    (_, m) => m
-  );
-
-  for (let i = 0; i < 3; i += 1) {
-    const next = t
-      .replace(
-        /(\\frac\{[^{}\n]+\}\{[^{}\n]+\}|\\sqrt\{[^{}\n]+\}|\\(?:lim|sum|int)[^$\n]{0,80})\$\1/g,
-        (_, m) => `$${m}$`
-      )
-      .replace(/(\\frac\{[^{}\n]+\})\$\1/g, (_, m) => m);
-    if (next === t) break;
-    t = next;
-  }
-
-  const inlineMathOnly = /^\s*\$(?!\$)([\s\S]{1,160}?)\$(?!\$)\s*$/;
-  const mathOnly = /^\s*(\$\$|\$)([\s\S]{1,160}?)\1\s*$/;
-  const blockLike = /^\s*(#{1,6}\s|[-*+]\s+|\d+\.\s+|>|```|~~~|\|)/;
-  const listItemLike = /^\s*(?:[-*+]\s+|\d+\.\s+)/;
-  const connectorOnly = /^[,，.。;；:：()（）[\]{}=<>+\-*/|]+$/;
-  const mathSymbolOnly =
-    /^(?=.{1,28}$)(?!.*[\p{Script=Han}，。！？、；：])[\p{Letter}\p{Number}_{}^\\+\-*/=<>|.,()[\]∅∞∈∉⊂⊆⊃⊇∪∩∘°]+$/u;
-  const looseMathExpression =
-    /^(?=.{1,40}$)(?!.*[\p{Script=Han}，。！？、；：])[\p{Letter}\p{Number}\s_{}^\\+\-*/=<>|.,()[\]∅∞∈∉⊂⊆⊃⊇∪∩∘°]+$/u;
-  const cleanMathBody = (value) => {
-    const body = String(value).replace(/\s+/g, ' ').trim();
-    if (!body || body.length > 80 || /\\begin|\\\\/.test(body)) return null;
-    if (/[\p{Script=Han}，。！？、；：]/u.test(body)) return null;
-    if (!/[\p{Letter}\p{Number}\\∅∞∈∉⊂⊆⊃⊇∪∩∘°]/u.test(body)) return null;
-    return body;
-  };
-  const shortMathPart = (value) => {
-    const match = String(value).trim().match(mathOnly);
-    if (!match) return null;
-    const body = cleanMathBody(match[2]);
-    if (!body) return null;
-    return `$${body}$`;
-  };
-  const inlineMathPart = (value) => {
-    const part = String(value).trim();
-    const inlineMatch = part.match(inlineMathOnly);
-    if (inlineMatch) {
-      const body = cleanMathBody(inlineMatch[1]);
-      return body ? `$${body}$` : part;
-    }
-    const mathPart = shortMathPart(part);
-    if (mathPart) return mathPart;
-    const body = cleanMathBody(part);
-    if (body && mathSymbolOnly.test(body)) return `$${body}$`;
-    if (body && looseMathExpression.test(body)) return `$${body}$`;
-    return null;
-  };
-  const combineAdjacentInlineMath = (value) => {
-    let next = value;
-    for (let i = 0; i < 6; i += 1) {
-      const prev = next;
-      next = next
-        .replace(
-          /\$([^$\n]+?)\$\s*([,，;；:：])\s*\$([^$\n]+?)\$/g,
-          (_, a, op, b) => `$${a.trim()}${op} ${b.trim()}$`
-        )
-        .replace(
-          /\$([^$\n]+?)\$\s+([=+\-*/<>|∈∉⊂⊆⊃⊇∪∩∘])\s+\$([^$\n]+?)\$/g,
-          (_, a, op, b) => `$${a.trim()} ${op} ${b.trim()}$`
-        )
-        .replace(
-          /\$([^$\n]+?)\$\s+\$([^$\n]+?)\$/g,
-          (_, a, b) => `$${a.trim()} ${b.trim()}$`
-        );
-      if (next === prev) break;
-    }
-    return next;
-  };
-  const mergeLooseInlineMath = (chunk) => {
-    const prepared = chunk.replace(
-      /(^|\n)\s*\$\$\s*([\s\S]{1,160}?)\s*\$\$\s*(?=\n|$)/g,
-      (match, lead, body) => {
-        const expr = cleanMathBody(body);
-        if (!expr) return match;
-        return `${lead}$${expr}$`;
-      }
-    );
-    const parts = prepared.split(/\n{2,}/);
-    const out = [];
-    let mergeNext = false;
-
-    const joinSoftBreaks = (value) => {
-      const trimmed = value.trim();
-      return blockLike.test(trimmed) ? trimmed : trimmed.replace(/[ \t]*\n[ \t]*/g, ' ');
-    };
-
-    for (let i = 0; i < parts.length; i += 1) {
-      const part = joinSoftBreaks(parts[i]);
-      if (!part) continue;
-
-      const next = joinSoftBreaks(parts[i + 1] || '');
-      const prev = out[out.length - 1] || '';
-      const inlinePart = inlineMathPart(part);
-      const prevCanAcceptInline = prev && (!blockLike.test(prev) || listItemLike.test(prev));
-      const canMergeMath =
-        inlinePart &&
-        prevCanAcceptInline;
-      const canContinueMathPhrase = mergeNext && !blockLike.test(part);
-
-      if (canMergeMath || canContinueMathPhrase) {
-        out[out.length - 1] = `${prev.replace(/\s+$/, '')} ${inlinePart || part}`;
-        mergeNext = canMergeMath || Boolean(inlinePart) || connectorOnly.test(part.trim());
-      } else {
-        out.push(part);
-        mergeNext = false;
-      }
-    }
-
-    return combineAdjacentInlineMath(out.join('\n\n'));
-  };
-
-  t = t
-    .split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g)
-    .map((chunk) => (/^(```|~~~)/.test(chunk) ? chunk : mergeLooseInlineMath(chunk)))
-    .join('');
-
-  return t;
 };
 
 const ASK_USER_JSON_PREFIX = '__PA_USER_JSON__\n';
@@ -468,6 +359,111 @@ const v29AbilityAxes = [
   { key: 'review', label: '复盘', hint: '错因回收', angle: 198, base: 0.38 },
 ];
 
+const compactInlineText = (value, maxLen = 120) =>
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
+
+const weakPointTitle = (point) =>
+  compactInlineText(point?.section || point?.concept || point?.target_concept || point?.question || '当前薄弱点', 80);
+
+const weakPointDetail = (point) => {
+  if (!point || typeof point !== 'object') return '';
+  const parts = [];
+  const question = compactInlineText(point.question || point.evidence || point.issue, 96);
+  const selected = compactInlineText(point.selected_answer, 72);
+  const correct = compactInlineText(point.correct_answer, 72);
+  const reason = compactInlineText(point.reason || point.suggestion || point.next_action, 120);
+  if (question && question !== weakPointTitle(point)) parts.push(`题目：${question}`);
+  if (selected) parts.push(`你的答案：${selected}`);
+  if (correct) parts.push(`正确答案：${correct}`);
+  if (reason) parts.push(`错因：${reason}`);
+  return parts.join('；');
+};
+
+const inferWeakPointResourceKey = (point, subject = '') => {
+  if (!point) return '';
+  const text = `${point.section || ''} ${point.question || ''} ${point.reason || ''} ${point.selected_answer || ''} ${point.correct_answer || ''} ${subject || ''}`;
+  if (/代码|程序|编程|运行|函数|算法|实现|python|java|c\+\+|javascript|sql/i.test(text)) return 'code_lab';
+  if (/表达|讲述|口播|复述|视频|脚本|分镜/.test(text)) return 'video_script';
+  if (/资料|来源|阅读|背景|延伸|论文|文档/.test(text)) return 'extended_reading';
+  if (/题|答案|错|练习|测验|选择|填空|判断|得分|未达标/.test(text)) return 'course_digest';
+  return 'course_digest';
+};
+
+const weakPointResourceReason = (point) => {
+  if (!point) return '';
+  const title = weakPointTitle(point);
+  const detail = weakPointDetail(point);
+  if (detail) return `根据「${title}」的错题证据，先把概念边界补清楚。`;
+  return `当前学习记录把「${title}」标为优先回看点。`;
+};
+
+const weakPointControlLine = (point, index = 0) => {
+  const title = weakPointTitle(point);
+  const detail = weakPointDetail(point);
+  return detail ? `${index + 1}. ${title}；${detail}` : `${index + 1}. ${title}`;
+};
+
+const portraitAxisAliases = {
+  foundation: ['知识基础', '学习目标对齐度'],
+  reasoning: ['认知风格', '知识基础'],
+  expression: ['学习节奏', '认知风格'],
+  transfer: ['兴趣与拓展倾向', '学习目标对齐度'],
+  review: ['易错点偏好', '学习节奏'],
+};
+
+const readPortraitScore = (dimensions, aliases = []) => {
+  if (!dimensions || typeof dimensions !== 'object') return null;
+  const values = aliases
+    .map((key) => Number(dimensions?.[key]?.score))
+    .filter((value) => Number.isFinite(value));
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + clamp01(value, 0.5), 0) / values.length;
+};
+
+const mergePortraitIntoAbilityProfile = (localProfile, portrait) => {
+  const dimensions = portrait?.dimensions && typeof portrait.dimensions === 'object' ? portrait.dimensions : null;
+  if (!dimensions) return localProfile;
+  return Object.fromEntries(
+    Object.entries(localProfile).map(([key, value]) => {
+      const portraitScore = readPortraitScore(dimensions, portraitAxisAliases[key]);
+      if (portraitScore == null) return [key, value];
+      return [key, clamp01(value * 0.68 + portraitScore * 0.32, value)];
+    })
+  );
+};
+
+const extractMindMapFocus = (markdown, fallbackLabel = '') => {
+  const text = String(markdown || '');
+  const fromMermaid = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const quoted = line.match(/\["([^"]{2,80})"\]/);
+      if (quoted) return quoted[1];
+      const paren = line.match(/\(\(([^()]{2,80})\)\)/);
+      if (paren) return paren[1];
+      return line
+        .replace(/^[-*#+\s]+/, '')
+        .replace(/^[a-zA-Z0-9_-]+\s*/, '')
+        .replace(/\{|\}|\[|\]|\(|\)|:::.*/g, '')
+        .trim();
+    })
+    .filter((line) => line && !/^```|^mermaid$|^mindmap$|^flowchart\b/i.test(line))
+    .filter((line) => line.length >= 2 && line.length <= 40);
+  const seen = new Set();
+  const focus = [fallbackLabel, ...fromMermaid].filter(Boolean).filter((item) => {
+    const key = item.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return focus.slice(0, 8);
+};
+
 const V29PageShell = ({ children, variant = 'default' }) => (
   <section className={`dp2-stage dp2-stage-${variant}`}>
     <AmbientField dense={variant !== 'loading'} />
@@ -512,20 +508,169 @@ function V29RadarTooltip({ active, payload, label }) {
 
 const V29LearningMap = React.memo(function V29LearningMap({ profile = {} }) {
   const glowId = React.useId().replace(/:/g, '');
+  const [hoveredAbility, setHoveredAbility] = useState(null);
   const chartData = v29AbilityAxes.map((axis) => {
     const value = clamp01(profile[axis.key] ?? axis.base, axis.base);
     const rhythm = Math.max(0.28, axis.base + value * 0.36);
+    const current = Math.round(value * 100);
+    const rhythmScore = Math.round(clamp01(rhythm) * 100);
     return {
+      ...axis,
       ability: axis.label,
       hint: axis.hint,
-      current: Math.round(value * 100),
-      rhythm: Math.round(clamp01(rhythm) * 100),
+      current,
+      rhythm: rhythmScore,
+      visualCurrent: Math.round((0.5 + value * 0.5) * 100),
+      visualRhythm: Math.round((0.52 + clamp01(rhythm) * 0.48) * 100),
+      state: qualitativeAbilityState(current),
+      rhythmState: qualitativeAbilityState(rhythmScore),
     };
   });
 
+  const center = { x: 130, y: 132 };
+  const maxRadius = 102;
+  const viewBox = { width: 260, height: 260 };
+  const labelBounds = { minX: 22, maxX: 238, minY: 24, maxY: 236 };
+  const toPoint = (angle, level = 1, radius = maxRadius) => {
+    const rad = (Math.PI / 180) * angle;
+    return {
+      x: center.x + Math.cos(rad) * radius * level,
+      y: center.y + Math.sin(rad) * radius * level,
+    };
+  };
+  const toLabelPoint = (angle) => {
+    const point = toPoint(angle, 1.12);
+    const rad = (Math.PI / 180) * angle;
+    const horizontal = Math.cos(rad);
+    const anchor = horizontal > 0.38 ? 'start' : horizontal < -0.38 ? 'end' : 'middle';
+    const offsetX = horizontal > 0.38 ? 6 : horizontal < -0.38 ? -6 : 0;
+    return {
+      x: Math.min(labelBounds.maxX, Math.max(labelBounds.minX, point.x + offsetX)),
+      y: Math.min(labelBounds.maxY, Math.max(labelBounds.minY, point.y)),
+      anchor,
+    };
+  };
+  const toPath = (items, valueKey) =>
+    `${items
+      .map((item, index) => {
+        const point = toPoint(item.angle, clamp01(item[valueKey] / 100, item[valueKey]));
+        return `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+      })
+      .join(' ')} Z`;
+  const gridLevels = [25, 50, 75, 100].map((level) =>
+    v29AbilityAxes.map((axis) => ({ ...axis, level })),
+  );
+  const handleAbilityPointerMove = (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const x = ((event.clientX - rect.left) / rect.width) * viewBox.width;
+    const y = ((event.clientY - rect.top) / rect.height) * viewBox.height;
+    const nearest = chartData.reduce(
+      (best, item) => {
+        const point = toPoint(item.angle, item.visualCurrent / 100);
+        const distance = Math.hypot(point.x - x, point.y - y);
+        return distance < best.distance ? { item, distance } : best;
+      },
+      { item: null, distance: Number.POSITIVE_INFINITY },
+    );
+    const next = nearest.distance <= 58 ? nearest.item : null;
+    setHoveredAbility((prev) => (prev?.key === next?.key ? prev : next));
+  };
+
   return (
+    <div className="dp2-ability-map dp2-radar-map" onMouseLeave={() => setHoveredAbility(null)}>
+      <svg
+        className="dp2-ability-svg"
+        viewBox={`0 0 ${viewBox.width} ${viewBox.height}`}
+        role="img"
+        aria-label="learning ability map"
+        overflow="visible"
+        onMouseMove={handleAbilityPointerMove}
+        onPointerMove={handleAbilityPointerMove}
+        onPointerLeave={() => setHoveredAbility(null)}
+      >
+        <defs>
+          <radialGradient id={`abilityGlow-${glowId}`} cx="50%" cy="48%" r="56%">
+            <stop offset="0%" stopColor="rgba(255,255,255,0.72)" />
+            <stop offset="64%" stopColor="rgba(107,132,130,0.12)" />
+            <stop offset="100%" stopColor="rgba(184,151,111,0)" />
+          </radialGradient>
+          <linearGradient id={`abilityStroke-${glowId}`} x1="20%" y1="0%" x2="86%" y2="100%">
+            <stop offset="0%" stopColor="rgba(89,120,122,0.88)" />
+            <stop offset="55%" stopColor="rgba(118,138,132,0.72)" />
+            <stop offset="100%" stopColor="rgba(184,151,111,0.62)" />
+          </linearGradient>
+          <filter id={`abilitySoftGlow-${glowId}`} x="-35%" y="-35%" width="170%" height="170%">
+            <feGaussianBlur stdDeviation="3.2" result="blur" />
+            <feColorMatrix
+              in="blur"
+              type="matrix"
+              values="0 0 0 0 0.38 0 0 0 0 0.53 0 0 0 0 0.54 0 0 0 0.42 0"
+              result="softGlow"
+            />
+            <feComposite in="SourceGraphic" in2="softGlow" operator="over" />
+          </filter>
+        </defs>
+        <ellipse className="dp2-ability-haze" cx={center.x} cy={center.y} rx="126" ry="118" fill={`url(#abilityGlow-${glowId})`} />
+        {gridLevels.map((items, index) => (
+          <path className="dp2-ability-ring" d={toPath(items, 'level')} key={index} />
+        ))}
+        {chartData.map((item) => {
+          const end = toPoint(item.angle, 1);
+          const label = toLabelPoint(item.angle);
+          const point = toPoint(item.angle, item.visualCurrent / 100);
+          return (
+            <g className="dp2-ability-axis" key={item.key}>
+              <path d={`M ${center.x} ${center.y} L ${end.x.toFixed(2)} ${end.y.toFixed(2)}`} />
+              <text x={label.x} y={label.y} textAnchor={label.anchor}>
+                {item.label}
+              </text>
+              <text className="dp2-ability-hint" x={label.x} y={label.y + 9} textAnchor={label.anchor}>
+                {item.state}
+              </text>
+              <g className="dp2-ability-point" transform={`translate(${point.x.toFixed(2)} ${point.y.toFixed(2)})`}>
+                <circle r="3.8" />
+                <circle r="10.4" />
+              </g>
+              <circle
+                className="dp2-ability-hit"
+                cx={point.x.toFixed(2)}
+                cy={point.y.toFixed(2)}
+                r="32"
+                tabIndex={0}
+                aria-label={`${item.label}：${item.state}`}
+                onMouseEnter={() => setHoveredAbility(item)}
+                onPointerEnter={() => setHoveredAbility(item)}
+                onFocus={() => setHoveredAbility(item)}
+              />
+            </g>
+          );
+        })}
+        <path className="dp2-ability-rhythm" d={toPath(chartData, 'visualRhythm')} filter={`url(#abilitySoftGlow-${glowId})`} />
+        <path className="dp2-ability-fill" d={toPath(chartData, 'visualCurrent')} />
+        <path
+          className="dp2-ability-stroke"
+          d={toPath(chartData, 'visualCurrent')}
+          stroke={`url(#abilityStroke-${glowId})`}
+          filter={`url(#abilitySoftGlow-${glowId})`}
+        />
+        <circle className="dp2-ability-core" cx={center.x} cy={center.y} r="4.4" />
+      </svg>
+      {hoveredAbility && (
+        <div className="dp2-ability-tooltip" role="status">
+          <strong>{hoveredAbility.label}</strong>
+          <span>{hoveredAbility.hint}</span>
+          <p>{`当前：${hoveredAbility.state}`}</p>
+          <p>{`节奏：${hoveredAbility.rhythmState}`}</p>
+        </div>
+      )}
+    </div>
+  );
+
+  return null;
+  /*
     <div className="dp2-ability-map dp2-radar-map">
-      <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} debounce={40}>
         <RadarChart data={chartData} margin={{ top: 10, right: 22, bottom: 8, left: 22 }}>
           <defs>
             <filter id={`multi-stroke-line-glow-${glowId}`} x="-35%" y="-35%" width="170%" height="170%">
@@ -564,7 +709,7 @@ const V29LearningMap = React.memo(function V29LearningMap({ profile = {} }) {
         </RadarChart>
       </ResponsiveContainer>
     </div>
-  );
+  */
 });
 
 const extractFencedCodeBlocks = (text) => {
@@ -626,12 +771,72 @@ function V29CodeResourceView({ markdown }) {
 
 const extractMarkdownLinks = (text) => {
   const links = [];
+  const seen = new Set();
+  const normalizeUrl = (raw) => {
+    let url = String(raw || '').trim().replace(/^[`"'(<\[]+|[`"')>\].,，。；;：:！？!?]+$/g, '');
+    for (let i = 0; i < 8 && url.length > 8; i += 1) {
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.href;
+      } catch {
+        const next = url.replace(/[),.;:!?'"，。；：！？）】]+$/u, '');
+        if (next === url) break;
+        url = next;
+      }
+    }
+    return '';
+  };
+  const isConcreteUrl = (url) => {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+      const path = `${parsed.pathname}${parsed.search}`.toLowerCase();
+      if (!parsed.pathname || parsed.pathname === '/') return false;
+      if (/^google\./i.test(host) && path.includes('/search')) return false;
+      if (host === 'baidu.com' && (parsed.pathname === '/s' || parsed.searchParams.has('wd'))) return false;
+      if (/\.bing\.com$/i.test(host) && path.includes('/search')) return false;
+      if (host === 'duckduckgo.com' && parsed.searchParams.has('q')) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const push = (title, rawUrl) => {
+    const url = normalizeUrl(rawUrl);
+    if (!url || !isConcreteUrl(url) || seen.has(url)) return;
+    seen.add(url);
+    links.push({ title: String(title || url).replace(/\s+/g, ' ').trim(), url });
+  };
   const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
   let match;
   while ((match = re.exec(text || '')) !== null) {
-    links.push({ title: match[1].trim(), url: match[2].trim() });
+    push(match[1], match[2]);
   }
-  return links.filter((item, index, arr) => arr.findIndex((x) => x.url === item.url) === index).slice(0, 6);
+  const bare = /(^|[\s(（：:])((https?:\/\/[^\s)）\]]+))/gi;
+  while ((match = bare.exec(text || '')) !== null) {
+    push(match[2], match[2]);
+  }
+  if (!links.length) {
+    const lines = String(text || '').split(/\r?\n/);
+    let inSourceBlock = false;
+    lines.forEach((rawLine) => {
+      const line = rawLine.trim();
+      if (/^#{1,6}\s*(信息来源|相关延伸链接|来源|参考来源|参考资料|资料来源)/.test(line)) {
+        inSourceBlock = true;
+        return;
+      }
+      if (inSourceBlock && /^#{1,6}\s+/.test(line)) {
+        inSourceBlock = false;
+        return;
+      }
+      if (!inSourceBlock || !line || /https?:\/\//i.test(line)) return;
+      const title = line.replace(/^[-*+]\s*/, '').trim();
+      if (title && !links.some((item) => item.title === title)) {
+        links.push({ title, url: `#source-note-${links.length + 1}` });
+      }
+    });
+  }
+  return links.slice(0, 8);
 };
 
 function V29ExtendedReadingView({ markdown }) {
@@ -789,13 +994,20 @@ function V29InlineMindMap({ markdown, streaming, compact = false }) {
   );
 }
 
+function isSectionEffectivelyPassed(progressState) {
+  if (!progressState) return false;
+  if (typeof progressState.effectively_passed === 'boolean') return progressState.effectively_passed;
+  const weakPoints = Array.isArray(progressState.weak_points) ? progressState.weak_points : [];
+  return Boolean(progressState.small_quiz_passed && weakPoints.length === 0);
+}
+
 function buildSectionMindMapFallback({ subject, chapter, section, progressState }) {
   if (!chapter || !section) return '';
   const siblings = Array.isArray(chapter.sections) ? chapter.sections : [];
   const currentIndex = siblings.findIndex((s) => s.id === section.id);
   const before = siblings.slice(Math.max(0, currentIndex - 2), currentIndex).map((s) => s.title);
   const after = siblings.slice(currentIndex + 1, currentIndex + 3).map((s) => s.title);
-  const state = progressState?.small_quiz_passed
+  const state = isSectionEffectivelyPassed(progressState)
     ? '已完成小测'
     : progressState?.learn_turns
       ? '正在形成理解'
@@ -871,14 +1083,23 @@ function V29ResourceWorkspace({
   chapterId,
   sectionId,
   scopeLabel,
+  learningInsightHint = '',
+  recommendedResourceKey = '',
   onBack,
   onMindMapReady,
+  onPracticeResult,
+  onResourceFinished,
 }) {
   const [overview, setOverview] = useState(null);
   const [activeKey, setActiveKey] = useState(v29ResourceModes[0][0]);
   const [resourceDrafts, setResourceDrafts] = useState({});
   const [streamingKey, setStreamingKey] = useState('');
+  const [practiceQuizOpen, setPracticeQuizOpen] = useState(false);
+  const [practiceScope, setPracticeScope] = useState(null);
   const abortRef = useRef(null);
+  const userTouchedResourceRef = useRef(false);
+  const recommendedAppliedRef = useRef('');
+  const resourceScopeKey = `${subject || ''}|${chapterId || ''}|${sectionId || ''}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -930,6 +1151,58 @@ function V29ResourceWorkspace({
     }
   }, [resourceEntries, activeKey]);
 
+  useEffect(() => {
+    let cancelled = false;
+    userTouchedResourceRef.current = false;
+    recommendedAppliedRef.current = '';
+    setPracticeScope(null);
+    setPracticeQuizOpen(false);
+    setResourceDrafts({});
+    if (!username || !subject || !chapterId || !sectionId) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    (async () => {
+      try {
+        const r = await fetch(
+          `${apiBase}/learning/studio/resources?username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}&chapter_id=${encodeURIComponent(chapterId)}&section_id=${encodeURIComponent(sectionId)}`
+        );
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || cancelled) return;
+        const restored = Object.fromEntries(
+          Object.entries(data.resources || {})
+            .map(([key, item]) => [key, { text: item?.content || '', err: '' }])
+            .filter(([, value]) => value.text)
+        );
+        if (!cancelled) {
+          setResourceDrafts(restored);
+          if (restored.practice_pack) {
+            setPracticeScope({ chapterId, sectionId, scopeLabel: data.scope_label || scopeLabel });
+          }
+        }
+      } catch {
+        /* ignore restore errors */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase, username, subject, chapterId, sectionId, scopeLabel, resourceScopeKey]);
+
+  useEffect(() => {
+    if (!recommendedResourceKey || !resourceEntries.length) return;
+    if (userTouchedResourceRef.current) return;
+    const appliedKey = `${resourceScopeKey}|${recommendedResourceKey}`;
+    if (recommendedAppliedRef.current === appliedKey) return;
+    if (resourceEntries.some((entry) => entry.key === recommendedResourceKey)) {
+      recommendedAppliedRef.current = appliedKey;
+      setActiveKey(recommendedResourceKey);
+    }
+  }, [recommendedResourceKey, resourceEntries, resourceScopeKey]);
+
   const activeEntry = resourceEntries.find((x) => x.key === activeKey) || resourceEntries[0];
   const activeDraft = resourceDrafts[activeEntry?.key] || { text: '', err: '' };
   const streamText = activeDraft.text || '';
@@ -939,11 +1212,16 @@ function V29ResourceWorkspace({
   const streamDisplay = useMemo(() => decodeResourceMarkdownStream(streamText), [streamText]);
   const canGenerate = !!(chapterId && sectionId && activeEntry?.key);
 
+  useEffect(() => {
+    if (activeEntry?.key !== 'practice_pack') setPracticeQuizOpen(false);
+  }, [activeEntry?.key]);
+
   const startResource = async (key = activeEntry?.key) => {
     const nextKey = key || activeEntry?.key;
     if (!nextKey) return;
     setActiveKey(nextKey);
     setResourceDrafts((prev) => ({ ...prev, [nextKey]: { text: '', err: '' } }));
+    if (nextKey === 'practice_pack') setPracticeQuizOpen(false);
 
     if (!chapterId || !sectionId) {
       setResourceDrafts((prev) => ({ ...prev, [nextKey]: { text: '', err: '先选一个小节，我才能为它准备材料。' } }));
@@ -959,6 +1237,8 @@ function V29ResourceWorkspace({
     const ac = new AbortController();
     abortRef.current = ac;
     setStreamingKey(nextKey);
+    const requestScope = { chapterId, sectionId, scopeLabel };
+    if (nextKey === 'practice_pack') setPracticeScope(requestScope);
 
     try {
       const r = await fetch(`${apiBase}/learning/studio/resources/stream`, {
@@ -971,7 +1251,7 @@ function V29ResourceWorkspace({
           chapter_id: chapterId,
           section_id: sectionId,
           resource_type: nextKey,
-          extra_hint: '',
+          extra_hint: learningInsightHint,
         }),
       });
 
@@ -1001,6 +1281,11 @@ function V29ResourceWorkspace({
       acc += decoder.decode();
       setResourceDrafts((prev) => ({ ...prev, [nextKey]: { text: acc, err: '' } }));
       if (nextKey === 'mind_map') onMindMapReady?.(decodeResourceMarkdownStream(acc));
+      if (nextKey === 'practice_pack') {
+        setPracticeScope(requestScope);
+        setPracticeQuizOpen(true);
+      }
+      onResourceFinished?.(nextKey);
     } catch (e) {
       if (e?.name !== 'AbortError') {
         setResourceDrafts((prev) => ({
@@ -1016,6 +1301,7 @@ function V29ResourceWorkspace({
   const clearActiveResource = () => {
     if (!activeEntry?.key) return;
     setResourceDrafts((prev) => ({ ...prev, [activeEntry.key]: { text: '', err: '' } }));
+    if (activeEntry.key === 'practice_pack') setPracticeQuizOpen(false);
   };
 
   return (
@@ -1037,14 +1323,19 @@ function V29ResourceWorkspace({
               {resourceEntries.map((entry, index) => (
                 <button
                   key={entry.key}
-                  className={`dp2-resource-mode is-${entry.tone} ${entry.key === activeEntry?.key ? 'is-active' : ''}`}
+                  className={`dp2-resource-mode is-${entry.tone} ${entry.key === activeEntry?.key ? 'is-active' : ''} ${entry.key === recommendedResourceKey ? 'is-recommended' : ''}`}
                   type="button"
                   style={{ animationDelay: `${index * 70}ms` }}
                   aria-pressed={entry.key === activeEntry?.key}
-                  onClick={() => setActiveKey(entry.key)}
+                  onClick={() => {
+                    userTouchedResourceRef.current = true;
+                    setActiveKey(entry.key);
+                  }}
                 >
                   <span>{entry.title}</span>
                   <small>{entry.desc}</small>
+                  {entry.key === recommendedResourceKey && <em>推荐</em>}
+                  {resourceDrafts[entry.key]?.text && <em>已保存</em>}
                 </button>
               ))}
             </nav>
@@ -1080,6 +1371,32 @@ function V29ResourceWorkspace({
                   </div>
                 ) : activeEntry?.key === 'extended_reading' ? (
                   <V29ExtendedReadingView markdown={streamDisplay} />
+                ) : activeEntry?.key === 'practice_pack' ? (
+                  <div className="dp2-resource-practice-ready">
+                    <div className="dp2-resource-practice-copy">
+                      <span>ASSESSMENT PAPER</span>
+                      <h4>练习卷已经排好</h4>
+                      <p>包含单选、多选、判断、填空和简答；完成后可查看并导出全部题目与详细解析。</p>
+                    </div>
+                    <V29Button onClick={() => setPracticeQuizOpen(true)}>进入答题</V29Button>
+                    <PracticePackQuizWindow
+                      open={practiceQuizOpen}
+                      rawMarkdown={streamDisplay || streamText}
+                      onClose={() => setPracticeQuizOpen(false)}
+                      onResult={(result) => {
+                        const weak = assessmentWeakPointsFromResult(result, {
+                          scopeLabel,
+                          fallbackSection: activeEntry?.title || '',
+                        });
+                        return onPracticeResult?.({
+                          weak_points: weak,
+                          score: result?.score || 0,
+                          chapter_id: practiceScope?.chapterId || chapterId,
+                          section_id: practiceScope?.sectionId || sectionId,
+                        });
+                      }}
+                    />
+                  </div>
                 ) : activeEntry?.key === 'code_lab' ? (
                   <V29CodeResourceView markdown={streamDisplay} />
                 ) : activeEntry?.key === 'video_script' ? (
@@ -1124,6 +1441,8 @@ function V29ResourceWorkspace({
 }
 
 const LoginView = ({ onLoginSuccess }) => {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [authStep, setAuthStep] = useState('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -1143,10 +1462,9 @@ const LoginView = ({ onLoginSuccess }) => {
   const passwordRef = useRef(null);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('reset') !== '1') return;
-    const u = sanitizeUsername(params.get('username') || '');
-    const t = (params.get('token') || '').replace(/\s/g, '');
+    if (searchParams.get('reset') !== '1') return;
+    const u = sanitizeUsername(searchParams.get('username') || '');
+    const t = (searchParams.get('token') || '').replace(/\s/g, '');
     if (u.length >= 2 && t.length >= 16) {
       setUsername(u);
       setResetToken(t);
@@ -1154,9 +1472,9 @@ const LoginView = ({ onLoginSuccess }) => {
       setTokenReady(false);
       setErrorMsg('');
       setSuccessMsg('');
-      window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash || ''}`);
+      navigate('/login', { replace: true });
     }
-  }, []);
+  }, [navigate, searchParams]);
 
   useEffect(() => {
     setShowPassword(false);
@@ -2377,7 +2695,8 @@ const SubjectGridExactV29 = ({ onSelectSubject, onSwitchAccount, username, apiBa
     (async () => {
       try {
         setCourseErr('');
-        const r = await fetch(`${apiBase}/courses`);
+        const qs = username ? `?username=${encodeURIComponent(username)}` : '';
+        const r = await fetch(`${apiBase}/courses${qs}`);
         const data = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(formatApiDetail(data) || data?.detail || '课程列表暂时不可用');
         if (!cancelled) setRemoteCourses(Array.isArray(data.courses) ? data.courses : []);
@@ -2391,7 +2710,7 @@ const SubjectGridExactV29 = ({ onSelectSubject, onSwitchAccount, username, apiBa
     return () => {
       cancelled = true;
     };
-  }, [apiBase]);
+  }, [apiBase, username]);
 
   const subjects = useMemo(() => {
     const fallback = v29Subjects.map(([title, topic, state, progress], index) => ({
@@ -2408,15 +2727,26 @@ const SubjectGridExactV29 = ({ onSelectSubject, onSwitchAccount, username, apiBa
     return remoteCourses.map((course, index) => {
       const base = fallback[index % fallback.length];
       const firstTopic = course.first_section_title || course.first_chapter_title || base.topic;
+      const progressPercent = Number.isFinite(Number(course.progress_percent))
+        ? Math.max(0, Math.min(100, Number(course.progress_percent)))
+        : base.progress;
+      const state =
+        course.status_key === 'done'
+          ? 'done'
+          : course.status_key === 'active'
+            ? 'active'
+            : index === 0
+              ? 'ready'
+              : 'next';
       return {
         id: course.id || course.name,
         name: course.name,
         lead: v29CourseShowcase[index % v29CourseShowcase.length]?.[0] || base.lead,
         topic: firstTopic,
-        state: index === 0 ? 'active' : index < 3 ? 'ready' : 'next',
-        progress: base.progress,
-        status: index === 0 ? '正在学习' : '可进入',
-        desc: course.description || base.desc,
+        state,
+        progress: progressPercent,
+        status: course.status || base.status,
+        desc: course.recommended_action || course.description || base.desc,
       };
     });
   }, [remoteCourses]);
@@ -2501,7 +2831,17 @@ const SubjectGridExactV29 = ({ onSelectSubject, onSwitchAccount, username, apiBa
 };
 
 // --- 3. 对话界面：会话列表 + 章节目录（大章 / 小节，数据来自后端 /learning-catalog）---
-const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'free' }) => {
+const ChatView = ({
+  subject,
+  username,
+  onBack,
+  onSwitchAccount,
+  initialMode = 'free',
+  initialOpenHistory = false,
+  onInitialHistoryHandled,
+}) => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const welcomeMessage = { role: 'assistant', content: `你好 **${username}**，我们从 **${subject}** 里挑一个点，慢慢把它讲亮。` };
 
   const [catalog, setCatalog] = useState([]);
@@ -2520,37 +2860,70 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState('');
   const [sessionQuery, setSessionQuery] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [deletingSessionId, setDeletingSessionId] = useState(null);
 
   const [chapterRightTab, setChapterRightTab] = useState('catalog');
-  const [studioPanel, setStudioPanel] = useState('study');
+  const [studioPanel, setStudioPanel] = useState(() =>
+    location.pathname.startsWith('/study/resources') ? 'resources' : 'study'
+  );
   const [visitedSections, setVisitedSections] = useState([]);
   const [progress, setProgress] = useState({ sections: {}, chapters: {}, sectionRule: null });
+  const [learningInsights, setLearningInsights] = useState({ control: null, weak_points: [], weak_scope_key: '' });
+  const [studioPath, setStudioPath] = useState(null);
+  const [studioPathErr, setStudioPathErr] = useState('');
   const [learnMode, setLearnMode] = useState(initialMode === 'guided');
   const [quizModal, setQuizModal] = useState(null);
   const [chapterPanelWidth] = useState(380);
   const [mindMapMarkdown, setMindMapMarkdown] = useState('');
   const [mindMapStreaming, setMindMapStreaming] = useState(false);
   const [mindMapErr, setMindMapErr] = useState('');
+  const [mindMapFocus, setMindMapFocus] = useState([]);
+  const [portraitSignals, setPortraitSignals] = useState(null);
+  const [learningSyncNote, setLearningSyncNote] = useState('');
 
   const messagesEndRef = useRef(null);
   const dialogueScrollRef = useRef(null);
   const legacyMessagesScrollRef = useRef(null);
   const outputStartScrollFrameRef = useRef(null);
+  const streamAutoScrollRef = useRef(false);
+  const programmaticScrollAtRef = useRef(0);
   const imageInputRef = useRef(null);
   const bufferRef = useRef('');
   const displayRef = useRef('');
   const rawRef = useRef('');
+  const streamMetaSuppressedRef = useRef(false);
+  const pendingLearnMetaRef = useRef(null);
   const rafRef = useRef(null);
   const readerRef = useRef(null);
   const quizStripRef = useRef(null);
   const mindMapAbortRef = useRef(null);
   const guidedAutoStartedRef = useRef(false);
+  const smallQuizCacheRef = useRef(new Map());
+  const smallQuizRequestRef = useRef(new Map());
+
+  useEffect(() => {
+    if (!initialOpenHistory) return;
+    setHistoryOpen(true);
+    onInitialHistoryHandled?.();
+  }, [initialOpenHistory, onInitialHistoryHandled]);
   /** 刚流式输出完的会话 id：在此 id 的历史尚未可查时不要用「空历史 → 欢迎页」覆盖界面 */
   const preferUiOverHistoryUntilRef = useRef(null);
 
   const progressKey = `section_progress_${username}_${subject}`;
+  const routeStudioPanel = (nextPanel, options = {}) => {
+    const panel = nextPanel === 'resources' ? 'resources' : 'study';
+    setStudioPanel(panel);
+    navigate(buildStudyPath({ subject, mode: learnMode ? 'guided' : 'free', panel }), {
+      replace: Boolean(options.replace),
+    });
+  };
+
+  useEffect(() => {
+    const nextPanel = location.pathname.startsWith('/study/resources') ? 'resources' : 'study';
+    setStudioPanel((prev) => (prev === nextPanel ? prev : nextPanel));
+  }, [location.pathname]);
 
   const totalSectionCount = useMemo(
     () => catalog.reduce((n, ch) => n + (ch.sections?.length || 0), 0),
@@ -2572,9 +2945,15 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
 
   const getMessagesScroller = () => dialogueScrollRef.current || legacyMessagesScrollRef.current;
 
+  const isMessagesNearBottom = (el, threshold = 180) => {
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+  };
+
   const scrollMessagesToBottom = (behavior = 'smooth') => {
     const el = getMessagesScroller();
     if (el) {
+      programmaticScrollAtRef.current = Date.now();
       el.scrollTo({ top: el.scrollHeight, behavior });
       return;
     }
@@ -2582,6 +2961,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
   };
 
   const scrollMessagesOnOutputStart = () => {
+    streamAutoScrollRef.current = true;
     if (outputStartScrollFrameRef.current) cancelAnimationFrame(outputStartScrollFrameRef.current);
     outputStartScrollFrameRef.current = requestAnimationFrame(() => {
       outputStartScrollFrameRef.current = requestAnimationFrame(() => {
@@ -2589,6 +2969,30 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         outputStartScrollFrameRef.current = null;
       });
     });
+  };
+
+  const keepStreamAtBottomIfAllowed = () => {
+    if (!streamAutoScrollRef.current) return;
+    requestAnimationFrame(() => {
+      if (streamAutoScrollRef.current) scrollMessagesToBottom('auto');
+    });
+  };
+
+  const handleDialogueScroll = () => {
+    if (!streamAutoScrollRef.current) return;
+    if (Date.now() - programmaticScrollAtRef.current < 140) return;
+    const el = getMessagesScroller();
+    if (el && !isMessagesNearBottom(el, 220)) {
+      streamAutoScrollRef.current = false;
+    }
+  };
+
+  const resetAssistantStreamState = () => {
+    bufferRef.current = '';
+    displayRef.current = '';
+    rawRef.current = '';
+    streamMetaSuppressedRef.current = false;
+    pendingLearnMetaRef.current = null;
   };
 
   useEffect(() => {
@@ -2664,8 +3068,12 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
   const loadLearningProgress = async () => {
     if (!username || !subject) return;
     try {
+      const scopePart =
+        selectedChapterId && selectedSectionId
+          ? `&chapter_id=${encodeURIComponent(selectedChapterId)}&section_id=${encodeURIComponent(selectedSectionId)}`
+          : '';
       const r = await fetch(
-        `${API_BASE}/learning/progress?username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}`
+        `${API_BASE}/learning/progress?username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}${scopePart}`
       );
       const d = await r.json().catch(() => ({}));
       if (!r.ok) return;
@@ -2674,9 +3082,66 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         chapters: d.chapters || {},
         sectionRule: d.section_completion_rule || null,
       });
+      const currentKey =
+        selectedChapterId && selectedSectionId
+          ? `${selectedChapterId}|${selectedSectionId}`
+          : '';
+      const sectionWeak = currentKey && Array.isArray(d.sections?.[currentKey]?.weak_points)
+        ? d.sections[currentKey].weak_points
+        : [];
+      setLearningInsights((prev) => {
+        const previousWeak = Array.isArray(prev.weak_points) ? prev.weak_points : [];
+        const keepFreshWeak =
+          currentKey &&
+          prev.weak_scope_key === currentKey &&
+          previousWeak.length > 0 &&
+          sectionWeak.length === 0;
+        return {
+          ...prev,
+          control: d.control || prev.control,
+          weak_points: sectionWeak.length ? sectionWeak : keepFreshWeak ? previousWeak : [],
+          weak_scope_key: currentKey || prev.weak_scope_key || '',
+        };
+      });
     } catch {
       /* ignore */
     }
+  };
+
+  const loadStudioPath = async () => {
+    if (!username || !subject) return;
+    try {
+      const r = await fetch(
+        `${API_BASE}/learning/studio/path?username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}`
+      );
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setStudioPathErr(formatApiDetail(d) || '');
+        return;
+      }
+      setStudioPath(d.path || null);
+      setStudioPathErr('');
+    } catch {
+      setStudioPathErr('');
+    }
+  };
+
+  const loadPortraitSignals = async () => {
+    if (!username || !subject) return;
+    try {
+      const r = await fetch(
+        `${API_BASE}/learning/studio/portrait?username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}`
+      );
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return;
+      setPortraitSignals(d.portrait || null);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const refreshLearningState = async () => {
+    await Promise.all([loadLearningProgress(), loadStudioPath(), loadPortraitSignals()]);
   };
 
   const loadSessionHistory = async (sessionId) => {
@@ -2731,6 +3196,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     setMessages([welcomeMessage]);
     setSessions([]);
     setSessionQuery('');
+    setHistoryOpen(Boolean(initialOpenHistory));
     setCatalog([]);
     setCatalogErr('');
     setCatalogLoading(true);
@@ -2740,16 +3206,22 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     setLearnMode(initialMode === 'guided');
     setQuizModal(null);
     setProgress({ sections: {}, chapters: {}, sectionRule: null });
+    setLearningInsights({ control: null, weak_points: [], weak_scope_key: '' });
+    setStudioPath(null);
+    setStudioPathErr('');
     setMindMapMarkdown('');
     setMindMapStreaming(false);
     setMindMapErr('');
+    setMindMapFocus([]);
+    setPortraitSignals(null);
+    setLearningSyncNote('');
     setChapterRightTab('catalog');
-    setStudioPanel('study');
+    setStudioPanel(location.pathname.startsWith('/study/resources') ? 'resources' : 'study');
     guidedAutoStartedRef.current = false;
     preferUiOverHistoryUntilRef.current = null;
 
     loadSessions();
-    loadLearningProgress();
+    refreshLearningState();
 
     let cancelled = false;
     (async () => {
@@ -2769,7 +3241,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
           setSelectedSectionId(s0.id);
           setExpandedChapters({ [ch0.id]: true });
         }
-        if (!cancelled) await loadLearningProgress();
+        if (!cancelled) await refreshLearningState();
       } catch (e) {
         if (!cancelled) {
           setCatalogErr(e?.message || '章节目录加载失败');
@@ -2790,8 +3262,17 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     localStorage.setItem(progressKey, JSON.stringify(visitedSections));
   }, [visitedSections, progressKey]);
 
+  useEffect(() => {
+    if (!username || !subject || !selectedChapterId || !selectedSectionId) return;
+    const scopeKey = selectedChapterId && selectedSectionId ? `${selectedChapterId}|${selectedSectionId}` : '';
+    setLearningInsights((prev) => ({ ...prev, control: null, weak_points: [], weak_scope_key: scopeKey }));
+    setLearningSyncNote('');
+    void refreshLearningState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [username, subject, selectedChapterId, selectedSectionId]);
+
   const passedSectionCount = useMemo(() => {
-    return Object.values(progress.sections || {}).filter((x) => x.small_quiz_passed).length;
+    return Object.values(progress.sections || {}).filter((x) => isSectionEffectivelyPassed(x)).length;
   }, [progress.sections]);
 
   const progressPercent = totalSectionCount
@@ -2807,6 +3288,9 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         value?.phase,
         value?.small_quiz_score,
         value?.small_quiz_passed,
+        value?.effectively_passed,
+        value?.needs_review,
+        Array.isArray(value?.weak_points) ? value.weak_points.length : 0,
         value?.updated_at,
       ])
       .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
@@ -2822,12 +3306,20 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     return JSON.stringify({ sections, chapters });
   }, [progress.sections, progress.chapters]);
 
+  useEffect(() => {
+    if (!username || !subject) return;
+    void loadStudioPath();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [username, subject, progressSignal]);
+
   const currentSectionProgress = sessionScopeKey ? progress.sections?.[sessionScopeKey] : null;
   const currentMasteryPercent = Math.round(Math.max(0, Math.min(1, Number(currentSectionProgress?.mastery || 0))) * 100);
   const sectionRule = progress.sectionRule || {};
   const sectionMasteryTarget = Math.round(Number(sectionRule.mastery_threshold ?? 0.72) * 100);
   const sectionForceTurns = Number(sectionRule.force_quiz_turns ?? 6);
-  const canPrepareSmallQuiz = !!selectedChapterId && !!selectedSectionId && !currentSectionProgress?.small_quiz_passed;
+  const currentSectionPassed = isSectionEffectivelyPassed(currentSectionProgress);
+  const currentSectionNeedsReview = Boolean(currentSectionProgress?.needs_review || (currentSectionProgress?.weak_points || []).length);
+  const canPrepareSmallQuiz = !!selectedChapterId && !!selectedSectionId && !currentSectionPassed;
   const selectedChapter = useMemo(
     () => catalog.find((chapter) => chapter.id === selectedChapterId) || null,
     [catalog, selectedChapterId]
@@ -2836,26 +3328,68 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     () => selectedChapter?.sections?.find((section) => section.id === selectedSectionId) || null,
     [selectedChapter, selectedSectionId]
   );
+
+  const resolveControlTarget = (control) => {
+    if (!control || typeof control !== 'object') return null;
+    if (control.action === 'next_section' && control.next) return control.next;
+    if (control.action === 'repair_weak') return control.current || control.weak_focus?.[0] || null;
+    if (['take_quiz', 'prepare_quiz', 'continue_dialogue', 'start_guided', 'chapter_review'].includes(control.action)) {
+      return control.current || control.next || null;
+    }
+    return control.weak_focus?.[0] || control.current || control.next || null;
+  };
+
+  const applyControlFocus = (control) => {
+    const target = resolveControlTarget(control);
+    if (!target?.chapter_id || !target?.section_id) return;
+
+    setSelectedChapterId(target.chapter_id);
+    setSelectedSectionId(target.section_id);
+    setExpandedChapters((prev) => ({ ...prev, [target.chapter_id]: true }));
+
+    const targetKey = `${target.chapter_id}|${target.section_id}`;
+    const matched = sessions.find((s) => s.chapter === targetKey);
+    if (matched) {
+      setLearnMode(matched.session_kind === 'learn');
+      setCurrentSessionId(matched.id);
+      return;
+    }
+    setLearnMode(false);
+    setCurrentSessionId(null);
+  };
+
+  const scopeKeyFromControl = (control, fallback = sessionScopeKey) => {
+    const target = resolveControlTarget(control);
+    if (target?.key) return target.key;
+    if (target?.chapter_id && target?.section_id) return `${target.chapter_id}|${target.section_id}`;
+    return fallback || '';
+  };
+
   const abilityProfile = useMemo(() => {
     const sections = Object.values(progress.sections || {});
-    const activeCount = sections.filter((x) => x?.learn_turns || x?.small_quiz_passed).length;
+    const activeCount = sections.filter((x) => x?.learn_turns || isSectionEffectivelyPassed(x)).length;
     const passedRatio = totalSectionCount ? passedSectionCount / totalSectionCount : 0;
     const activeRatio = totalSectionCount ? activeCount / totalSectionCount : 0;
     const mastery = clamp01(currentSectionProgress?.mastery, 0.28);
     const turnRatio = clamp01(Number(currentSectionProgress?.learn_turns || 0) / Math.max(1, sectionForceTurns), 0.2);
-    const quizSignal = currentSectionProgress?.small_quiz_passed
+    const currentWeakCount = Array.isArray(currentSectionProgress?.weak_points) ? currentSectionProgress.weak_points.length : 0;
+    const weakSectionCount = sections.filter((x) => Array.isArray(x?.weak_points) && x.weak_points.length > 0).length;
+    const weakPenalty = clamp01(currentWeakCount / 5 + (totalSectionCount ? weakSectionCount / totalSectionCount : 0) * 0.35, 0);
+    const repairSignal = currentSectionNeedsReview ? 0.2 : 0;
+    const quizSignal = currentSectionPassed
       ? 0.88
       : currentSectionProgress?.quiz_pending
         ? 0.62
         : 0.34;
-    return {
-      foundation: Math.max(0.3, mastery * 0.82 + activeRatio * 0.18),
-      reasoning: Math.max(0.28, mastery * 0.55 + turnRatio * 0.3 + passedRatio * 0.15),
+    const localProfile = {
+      foundation: Math.max(0.22, mastery * 0.82 + activeRatio * 0.18 - weakPenalty * 0.16),
+      reasoning: Math.max(0.24, mastery * 0.55 + turnRatio * 0.3 + passedRatio * 0.15 - weakPenalty * 0.1),
       expression: Math.max(0.26, turnRatio * 0.56 + mastery * 0.26 + activeRatio * 0.18),
-      transfer: Math.max(0.24, passedRatio * 0.58 + quizSignal * 0.24 + mastery * 0.18),
-      review: Math.max(0.3, quizSignal * 0.46 + turnRatio * 0.3 + passedRatio * 0.24),
+      transfer: Math.max(0.2, passedRatio * 0.58 + quizSignal * 0.24 + mastery * 0.18 - weakPenalty * 0.14),
+      review: Math.max(0.32, quizSignal * 0.38 + turnRatio * 0.22 + passedRatio * 0.2 + repairSignal + weakPenalty * 0.08),
     };
-  }, [currentSectionProgress, passedSectionCount, progress.sections, sectionForceTurns, totalSectionCount]);
+    return mergePortraitIntoAbilityProfile(localProfile, portraitSignals);
+  }, [currentSectionNeedsReview, currentSectionPassed, currentSectionProgress, passedSectionCount, portraitSignals, progress.sections, sectionForceTurns, totalSectionCount]);
   const mindMapFallbackMarkdown = useMemo(
     () =>
       buildSectionMindMapFallback({
@@ -2876,6 +3410,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     setMindMapMarkdown('');
     setMindMapErr('');
     setMindMapStreaming(false);
+    setMindMapFocus([]);
   }, [sessionScopeKey]);
 
   const generateMindMap = async () => {
@@ -2893,9 +3428,16 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     mindMapAbortRef.current = ac;
     setMindMapErr('');
     setMindMapMarkdown('');
+    setMindMapFocus([]);
     setMindMapStreaming(true);
 
     try {
+      const mindMapHint = [
+        '请严格输出一个 Mermaid mindmap 代码块，根节点是当前小节标题；节点短、层级清楚，只保留核心定义、方法、误区和练习观察。',
+        resourceInsightHint ? `当前学习状态：\n${resourceInsightHint}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n');
       const r = await fetch(`${API_BASE}/learning/studio/resources/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2906,7 +3448,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
           chapter_id: selectedChapterId,
           section_id: selectedSectionId,
           resource_type: 'mind_map',
-          extra_hint: '请严格输出一个 Mermaid mindmap 代码块，根节点是当前小节标题；节点短、层级清楚，只保留核心定义、方法、误区和练习观察。',
+          extra_hint: mindMapHint,
         }),
       });
 
@@ -2933,7 +3475,10 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
       }
       acc += decoder.decode();
       const decoded = decodeResourceMarkdownStream(acc);
-      setMindMapMarkdown(markdownToMarkmapOutline(decoded) ? decoded : mindMapFallbackMarkdown);
+      const nextMindMap = markdownToMarkmapOutline(decoded) ? decoded : mindMapFallbackMarkdown;
+      setMindMapMarkdown(nextMindMap);
+      setMindMapFocus(extractMindMapFocus(nextMindMap, scopeLabel));
+      await refreshLearningState();
     } catch (e) {
       if (e?.name !== 'AbortError') {
         setMindMapErr(e?.message || '导图生成失败，请稍后再试。');
@@ -3013,16 +3558,21 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
 
   const [quizPicks, setQuizPicks] = useState([]);
   const [quizIndex, setQuizIndex] = useState(0);
+  const quizQuestionSignature = useMemo(
+    () => (quizModal?.questions || []).map((question) => question?.id || question?.question || '').join('|'),
+    [quizModal?.questions]
+  );
 
   useEffect(() => {
+    if (quizModal?.result) return;
     if (quizModal?.questions?.length) {
-      setQuizPicks(quizModal.questions.map(() => -1));
+      setQuizPicks(quizModal.questions.map((question) => emptyAssessmentAnswer(question)));
       setQuizIndex(0);
     } else {
       setQuizPicks([]);
       setQuizIndex(0);
     }
-  }, [quizModal]);
+  }, [quizModal?.type, quizQuestionSignature, quizModal?.result]);
 
   const filteredSessions = useMemo(() => {
     const q = sessionQuery.trim().toLowerCase();
@@ -3039,9 +3589,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     setIsLoading(true);
     setLearnMode(true);
     setMessages([{ role: 'assistant', content: '' }]);
-    bufferRef.current = '';
-    displayRef.current = '';
-    rawRef.current = '';
+    resetAssistantStreamState();
     try {
       const r = await fetch(`${API_BASE}/learning/start-section`, {
         method: 'POST',
@@ -3051,6 +3599,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
           subject,
           chapter_id: selectedChapterId,
           section_id: selectedSectionId,
+          reset_progress: false,
         }),
       });
       if (!r.ok) {
@@ -3065,9 +3614,13 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         throw new Error(detail || `HTTP ${r.status}`);
       }
       const returnedSessionId = r.headers.get('X-Session-Id');
+      await refreshLearningState();
       startRenderLoop();
-      await pumpStream(r);
-      await finalizeAssistantStream({ stripLearnMeta: false });
+      await pumpStream(r, { onLearnMeta: applyLearnMetaPreview });
+      const meta = await finalizeAssistantStream({ stripLearnMeta: true });
+      if (meta?.control || meta?.weak_points) {
+        applyLearnMetaPreview(meta);
+      }
       const rs = returnedSessionId ? Number(returnedSessionId) : NaN;
       preferUiOverHistoryUntilRef.current = Number.isNaN(rs) ? null : rs;
       await loadSessions();
@@ -3075,16 +3628,14 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         const numericId = Number(returnedSessionId);
         if (!Number.isNaN(numericId)) setCurrentSessionId(numericId);
       }
-      await loadLearningProgress();
+      await refreshLearningState();
     } catch (e) {
       console.error(e);
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      bufferRef.current = '';
-      displayRef.current = '';
-      rawRef.current = '';
+      resetAssistantStreamState();
       preferUiOverHistoryUntilRef.current = null;
       setLearnMode(false);
       setCurrentSessionId(null);
@@ -3113,9 +3664,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     setIsLoading(true);
     setLearnMode(true);
     setMessages([{ role: 'assistant', content: '' }]);
-    bufferRef.current = '';
-    displayRef.current = '';
-    rawRef.current = '';
+    resetAssistantStreamState();
     try {
       const r = await fetch(`${API_BASE}/learning/start-section`, {
         method: 'POST',
@@ -3141,9 +3690,13 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         throw new Error(detail || `HTTP ${r.status}`);
       }
       const returnedSessionId = r.headers.get('X-Session-Id');
+      await refreshLearningState();
       startRenderLoop();
-      await pumpStream(r);
-      await finalizeAssistantStream({ stripLearnMeta: false });
+      await pumpStream(r, { onLearnMeta: applyLearnMetaPreview });
+      const meta = await finalizeAssistantStream({ stripLearnMeta: true });
+      if (meta?.control || meta?.weak_points) {
+        applyLearnMetaPreview(meta);
+      }
       const rs = returnedSessionId ? Number(returnedSessionId) : NaN;
       preferUiOverHistoryUntilRef.current = Number.isNaN(rs) ? null : rs;
       await loadSessions();
@@ -3151,7 +3704,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         const numericId = Number(returnedSessionId);
         if (!Number.isNaN(numericId)) setCurrentSessionId(numericId);
       }
-      await loadLearningProgress();
+      await refreshLearningState();
     } catch (e) {
       console.error(e);
       setMessages((prev) => [
@@ -3177,9 +3730,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
       }
       const userContent = packUserAskForDisplay(text, imageSnapshot);
       setMessages((prev) => [...prev, { role: 'user', content: userContent }, { role: 'assistant', content: '' }]);
-      bufferRef.current = '';
-      displayRef.current = '';
-      rawRef.current = '';
+      resetAssistantStreamState();
 
       const r = await fetch(`${API_BASE}/learning/answer-turn`, {
         method: 'POST',
@@ -3207,14 +3758,25 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
       }
 
       startRenderLoop();
-      await pumpStream(r);
+      await pumpStream(r, { onLearnMeta: applyLearnMetaPreview });
       const meta = await finalizeAssistantStream({ stripLearnMeta: true });
       const sid = Number(currentSessionId);
       preferUiOverHistoryUntilRef.current = Number.isNaN(sid) ? null : sid;
+      if (meta?.control || meta?.weak_points) {
+        if (Array.isArray(meta?.weak_points) && meta.weak_points.length && selectedChapterId && selectedSectionId) {
+          smallQuizCacheRef.current.delete(`${selectedChapterId}|${selectedSectionId}`);
+        }
+        setLearningInsights((prev) => ({
+          ...prev,
+          control: meta?.control || prev.control,
+          weak_points: Array.isArray(meta?.weak_points) ? meta.weak_points : prev.weak_points,
+          weak_scope_key: Array.isArray(meta?.weak_points) ? scopeKeyFromControl(meta?.control) : prev.weak_scope_key,
+        }));
+      }
       if (meta?.small_quiz && Array.isArray(meta.small_quiz) && meta.small_quiz.length >= SMALL_QUIZ_QUESTION_COUNT) {
         setQuizModal({ type: 'small', questions: meta.small_quiz });
       }
-      await loadLearningProgress();
+      await refreshLearningState();
       await loadSessions();
     } catch (e) {
       console.error(e);
@@ -3222,9 +3784,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      bufferRef.current = '';
-      displayRef.current = '';
-      rawRef.current = '';
+      resetAssistantStreamState();
       preferUiOverHistoryUntilRef.current = null;
       setMessages((prev) => {
         const updated = [...prev];
@@ -3243,35 +3803,78 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     }
   };
 
-  const prepareSmallQuiz = async () => {
-    if (!selectedChapterId || !selectedSectionId || isLoading) return;
-    setIsLoading(true);
-    try {
-      const r = await fetch(`${API_BASE}/learning/quiz/small/prepare`, {
+  const requestSmallQuiz = (chapterId, sectionId) => {
+    const key = `${chapterId}|${sectionId}`;
+    const cached = smallQuizCacheRef.current.get(key);
+    if (cached) return Promise.resolve(cached);
+    const pending = smallQuizRequestRef.current.get(key);
+    if (pending) return pending;
+
+    const request = fetch(`${API_BASE}/learning/quiz/small/prepare`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username,
           subject,
-          chapter_id: selectedChapterId,
-          section_id: selectedSectionId,
+          chapter_id: chapterId,
+          section_id: sectionId,
           mode: currentSectionProgress?.quiz_pending ? 'resume' : 'direct',
         }),
+      })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(formatApiDetail(data) || '小节测验生成失败');
+        if (Array.isArray(data.questions) && data.questions.length) {
+          smallQuizCacheRef.current.set(key, data);
+        }
+        return data;
+      })
+      .finally(() => {
+        smallQuizRequestRef.current.delete(key);
       });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(formatApiDetail(j) || '小节测验生成失败');
+    smallQuizRequestRef.current.set(key, request);
+    return request;
+  };
+
+  useEffect(() => {
+    if (
+      !selectedChapterId ||
+      !selectedSectionId ||
+      currentSectionPassed ||
+      !currentSectionProgress?.quiz_pending
+    ) return;
+    void requestSmallQuiz(selectedChapterId, selectedSectionId).catch(() => {
+      // 后台预取失败时保留按钮点击重试，不打断当前学习。
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    username,
+    subject,
+    selectedChapterId,
+    selectedSectionId,
+    currentSectionPassed,
+    currentSectionProgress?.quiz_pending,
+  ]);
+
+  const prepareSmallQuiz = async () => {
+    if (!selectedChapterId || !selectedSectionId || isLoading) return;
+    const chapterId = selectedChapterId;
+    const sectionId = selectedSectionId;
+    setQuizModal({ type: 'small', questions: [], loading: true });
+    try {
+      const j = await requestSmallQuiz(chapterId, sectionId);
       if (j.already_passed) {
+        setQuizModal(null);
         setMessages((prev) => [...prev, { role: 'assistant', content: '当前小节测验已经通过，可以继续学习后续小节。' }]);
-        await loadLearningProgress();
+        await refreshLearningState();
         return;
       }
       setQuizModal({ type: 'small', questions: j.questions || [] });
-      await loadLearningProgress();
+      await refreshLearningState();
     } catch (e) {
       console.error(e);
+      setQuizModal(null);
       setMessages((prev) => [...prev, { role: 'assistant', content: `小节测验生成失败：${e?.message || ''}` }]);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -3288,12 +3891,24 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
           chapter_id: selectedChapterId,
           section_id: selectedSectionId,
           answers,
+          session_id: currentSessionId || null,
         }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(formatApiDetail(j) || '提交失败');
       setQuizModal((prev) => (prev ? { ...prev, result: j } : prev));
-      await loadLearningProgress();
+      if (j.control || j.weak_points) {
+        applyControlFocus(j.control);
+        setLearningInsights((prev) => ({
+          ...prev,
+          control: j.control || prev.control,
+          weak_points: Array.isArray(j.weak_points) ? j.weak_points : prev.weak_points,
+          weak_scope_key: Array.isArray(j.weak_points) ? scopeKeyFromControl(j.control) : prev.weak_scope_key,
+        }));
+      }
+      smallQuizCacheRef.current.delete(`${selectedChapterId}|${selectedSectionId}`);
+      await refreshLearningState();
+      await loadSessions();
       if (!j.passed) {
         await startRemedialLearn(j);
       }
@@ -3330,11 +3945,20 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
       const r = await fetch(`${API_BASE}/learning/chapter-quiz/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, subject, chapter_id: chapterId, answers }),
+        body: JSON.stringify({ username, subject, chapter_id: chapterId, answers, session_id: currentSessionId || null }),
       });
       const j = await r.json().catch(() => ({}));
+      if (j.control || j.weak_points) {
+        applyControlFocus(j.control);
+        setLearningInsights((prev) => ({
+          ...prev,
+          control: j.control || prev.control,
+          weak_points: Array.isArray(j.weak_points) ? j.weak_points : prev.weak_points,
+          weak_scope_key: Array.isArray(j.weak_points) ? scopeKeyFromControl(j.control) : prev.weak_scope_key,
+        }));
+      }
       if (!r.ok) throw new Error(formatApiDetail(j) || '提交失败');
-      setQuizModal(null);
+      setQuizModal((prev) => (prev ? { ...prev, result: j } : prev));
       setMessages((prev) => [
         ...prev,
         {
@@ -3342,7 +3966,8 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
           content: `大章测验得分：**${Math.round(j.score)}** 分（${j.correct}/${j.total}）${j.passed ? '，已通过。' : '，未达 60 分可再次生成测验。'}`,
         },
       ]);
-      await loadLearningProgress();
+      await refreshLearningState();
+      await loadSessions();
     } catch (e) {
       console.error(e);
       setMessages((prev) => [...prev, { role: 'assistant', content: `大章测验提交失败：${e?.message || ''}` }]);
@@ -3418,7 +4043,30 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     }
   };
 
-  const pumpStream = async (response) => {
+  const applyLearnMetaPreview = (meta) => {
+    if (!meta || typeof meta !== 'object') return;
+    if (Array.isArray(meta?.weak_points) && meta.weak_points.length && selectedChapterId && selectedSectionId) {
+      smallQuizCacheRef.current.delete(`${selectedChapterId}|${selectedSectionId}`);
+    }
+    if (meta?.control || meta?.weak_points) {
+      setLearningInsights((prev) => ({
+        ...prev,
+        control: meta?.control || prev.control,
+        weak_points: Array.isArray(meta?.weak_points) ? meta.weak_points : prev.weak_points,
+        weak_scope_key: Array.isArray(meta?.weak_points) ? scopeKeyFromControl(meta?.control) : prev.weak_scope_key,
+      }));
+    }
+  };
+
+  const maybeConsumeLearnMeta = (onLearnMeta) => {
+    if (!onLearnMeta || pendingLearnMetaRef.current) return;
+    const parsed = stripLearnMetaTail(rawRef.current);
+    if (!parsed.meta) return;
+    pendingLearnMetaRef.current = parsed.meta;
+    onLearnMeta(parsed.meta);
+  };
+
+  const pumpStream = async (response, { onLearnMeta } = {}) => {
     if (!response.body) throw new Error('没有可读取的响应流');
     const reader = response.body.getReader();
     readerRef.current = reader;
@@ -3432,6 +4080,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
       const safeChunk = dedupeOverlap(rawRef.current, chunk);
       rawRef.current += safeChunk;
       bufferRef.current += safeChunk;
+      maybeConsumeLearnMeta(onLearnMeta);
     }
 
     const tail = decoder.decode();
@@ -3439,6 +4088,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
       const safeTail = dedupeOverlap(rawRef.current, tail);
       rawRef.current += safeTail;
       bufferRef.current += safeTail;
+      maybeConsumeLearnMeta(onLearnMeta);
     }
   };
 
@@ -3464,7 +4114,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     if (stripLearnMeta) {
       const parsed = stripLearnMetaTail(rawRef.current);
       content = parsed.display;
-      meta = parsed.meta;
+      meta = parsed.meta || pendingLearnMetaRef.current;
       displayRef.current = content;
     }
     setMessages((prev) => {
@@ -3475,6 +4125,14 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
       }
       return updated;
     });
+    if (streamAutoScrollRef.current) {
+      requestAnimationFrame(() => {
+        scrollMessagesToBottom('auto');
+        streamAutoScrollRef.current = false;
+      });
+    } else {
+      streamAutoScrollRef.current = false;
+    }
     return meta;
   };
 
@@ -3483,6 +4141,30 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     let lastEmit = 0;
 
     const tick = (now = performance.now()) => {
+      if (streamMetaSuppressedRef.current) {
+        bufferRef.current = '';
+      } else {
+        const combined = `${displayRef.current}${bufferRef.current}`;
+        const metaStart = combined.indexOf(LEARN_META_BEGIN);
+        if (metaStart !== -1) {
+          displayRef.current = combined.slice(0, metaStart).trimEnd();
+          bufferRef.current = '';
+          streamMetaSuppressedRef.current = true;
+          setMessages((prev) => {
+            const updated = [...prev];
+            const lastIndex = updated.length - 1;
+            if (lastIndex >= 0 && updated[lastIndex].role === 'assistant') {
+              updated[lastIndex] = {
+                ...updated[lastIndex],
+                content: displayRef.current,
+              };
+            }
+            return updated;
+          });
+          keepStreamAtBottomIfAllowed();
+        }
+      }
+
       if (bufferRef.current.length > 0 && now - lastEmit >= TYPING_MIN_INTERVAL_MS) {
         lastEmit = now;
         const { grapheme, rest } = popFirstGrapheme(bufferRef.current);
@@ -3500,6 +4182,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
             }
             return updated;
           });
+          keepStreamAtBottomIfAllowed();
         }
       }
 
@@ -3558,9 +4241,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     setPendingImages([]);
     setIsLoading(true);
 
-    bufferRef.current = '';
-    displayRef.current = '';
-    rawRef.current = '';
+    resetAssistantStreamState();
 
     try {
       const sessionPart = currentSessionId ? `&session_id=${encodeURIComponent(currentSessionId)}` : '';
@@ -3575,11 +4256,17 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
             subject,
             question: text,
             session_id: currentSessionId || undefined,
+            chapter_id: selectedChapterId || undefined,
+            section_id: selectedSectionId || undefined,
             images: imageSnapshot.map((x) => ({ media_type: x.mediaType, data_b64: x.dataB64 })),
           }),
         });
       } else {
-        const url = `${API_BASE}/ask?question=${encodeURIComponent(text)}&username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}${scopePart}${sessionPart}`;
+        const scopeQuery =
+          selectedChapterId && selectedSectionId
+            ? `&chapter_id=${encodeURIComponent(selectedChapterId)}&section_id=${encodeURIComponent(selectedSectionId)}`
+            : scopePart;
+        const url = `${API_BASE}/ask?question=${encodeURIComponent(text)}&username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}${scopeQuery}${sessionPart}`;
         response = await fetch(url);
       }
 
@@ -3602,8 +4289,12 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
       }
 
       startRenderLoop();
-      await pumpStream(response);
-      await finalizeAssistantStream({ stripLearnMeta: false });
+      await pumpStream(response, { onLearnMeta: applyLearnMetaPreview });
+      const askMeta = await finalizeAssistantStream({ stripLearnMeta: true });
+      if (askMeta?.control || askMeta?.weak_points) {
+        applyLearnMetaPreview(askMeta);
+        applyControlFocus(askMeta.control);
+      }
 
       if (returnedSessionId) {
         const n = Number(returnedSessionId);
@@ -3622,6 +4313,9 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         if (!Number.isNaN(numericId)) setCurrentSessionId(numericId);
       } else if (currentSessionId) {
         await loadSessionHistory(currentSessionId);
+      }
+      if (askMeta?.control || askMeta?.weak_points) {
+        await refreshLearningState();
       }
     } catch (e) {
       console.error(e);
@@ -3663,9 +4357,31 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
 
   const quizResult = quizModal?.result || null;
   const quizQuestions = quizModal?.questions || [];
+  const quizResultDownload = quizResult
+    ? assessmentMarkdownDownload({
+        title: `${subject}-${scopeLabel || '小节'}-测验题目与详细解析`,
+        result: quizResult,
+        questions: quizQuestions,
+        answers: quizPicks,
+      })
+    : null;
+  const quizWeakPoints = Array.isArray(quizResult?.weak_points)
+    ? quizResult.weak_points
+    : (quizResult?.items || [])
+        .filter((item) => !item?.is_correct)
+        .slice(0, 4)
+        .map((item) => ({
+          index: Number(item.index || 0) + 1,
+          section: item.section,
+          question: item.question,
+          reason: item.explanation,
+        }));
   const currentQuizQuestion = quizQuestions[quizIndex] || quizQuestions[0] || null;
   const isLastQuizQuestion = quizIndex >= quizQuestions.length - 1;
-  const allQuizAnswered = quizQuestions.length > 0 && quizPicks.length === quizQuestions.length && quizPicks.every((p) => p >= 0);
+  const allQuizAnswered =
+    quizQuestions.length > 0 &&
+    quizPicks.length === quizQuestions.length &&
+    quizQuestions.every((question, index) => isAssessmentAnswered(question, quizPicks[index]));
 
   useEffect(() => {
     if (!quizModal || quizResult || quizQuestions.length === 0) return;
@@ -3679,6 +4395,236 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
     event.stopPropagation();
     const direction = event.deltaY > 0 ? 1 : -1;
     setQuizIndex((index) => Math.max(0, Math.min(quizQuestions.length - 1, index + direction)));
+  };
+
+  const controlPlan = learningInsights?.control || null;
+  const studioPathSteps = Array.isArray(studioPath?.steps) ? studioPath.steps : [];
+  const studioFocusIndex =
+    studioPath?.focus_index !== null && studioPath?.focus_index !== undefined
+      ? Number(studioPath.focus_index)
+      : -1;
+  const studioFocusStep =
+    Number.isInteger(studioFocusIndex) && studioFocusIndex >= 0
+      ? studioPathSteps[studioFocusIndex] || null
+      : null;
+  const studioPathStepByKey = useMemo(() => {
+    const map = new Map();
+    studioPathSteps.forEach((step) => {
+      if (step?.chapter_id && step?.section_id) {
+        map.set(`${step.chapter_id}|${step.section_id}`, step);
+      }
+    });
+    return map;
+  }, [studioPathSteps]);
+  const studioFocusKey =
+    studioFocusStep?.chapter_id && studioFocusStep?.section_id
+      ? `${studioFocusStep.chapter_id}|${studioFocusStep.section_id}`
+      : '';
+  const resourceTypeLabel = {
+    course_digest: '精讲文档',
+    practice_pack: '练习包',
+    extended_reading: '拓展阅读',
+    code_lab: '代码实操',
+    video_script: '视频脚本',
+  };
+  const controlWeakFocus = Array.isArray(controlPlan?.weak_focus) ? controlPlan.weak_focus : [];
+  const visibleWeakPoints = useMemo(() => {
+    const sectionWeak = Array.isArray(currentSectionProgress?.weak_points) ? currentSectionProgress.weak_points : [];
+    const insightWeak = Array.isArray(learningInsights?.weak_points) ? learningInsights.weak_points : [];
+    const seen = new Set();
+    return [...insightWeak, ...sectionWeak].filter((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const key = `${item.section || ''}|${item.question || ''}|${item.reason || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 4);
+  }, [currentSectionProgress, learningInsights]);
+  const firstVisibleWeakPoint = visibleWeakPoints[0] || null;
+  const weakPointResourceKey = useMemo(
+    () => inferWeakPointResourceKey(firstVisibleWeakPoint, subject),
+    [firstVisibleWeakPoint, subject]
+  );
+  const controlActions = Array.isArray(controlPlan?.resource_actions) ? controlPlan.resource_actions : [];
+  const adaptiveRecommendedResourceKey =
+    controlActions[0]?.type || studioFocusStep?.recommended_resource || weakPointResourceKey || '';
+  const adaptiveRecommendedResourceReason =
+    controlActions[0]?.reason ||
+    controlPlan?.current_learning_goal?.recommended_reason ||
+    studioFocusStep?.recommended_reason ||
+    weakPointResourceReason(firstVisibleWeakPoint) ||
+    '';
+  const adaptiveRecommendedResourceLabel =
+    resourceTypeLabel[adaptiveRecommendedResourceKey] || controlActions[0]?.label || '学习素材';
+  const studioPathAction =
+    studioFocusStep && adaptiveRecommendedResourceKey
+      ? {
+          type: adaptiveRecommendedResourceKey,
+          label: adaptiveRecommendedResourceLabel || '补一份学习素材',
+          reason:
+            studioFocusStep.recommended_reason ||
+            (studioFocusStep.weak_points?.length
+              ? '先围绕薄弱点做针对练习'
+              : studioFocusStep.resource_count
+                ? '结合已有素材继续推进'
+                : '先补一份小节抓手'),
+        }
+      : null;
+  const weakPointAction =
+    firstVisibleWeakPoint && adaptiveRecommendedResourceKey
+      ? {
+          type: adaptiveRecommendedResourceKey,
+          label: adaptiveRecommendedResourceLabel || '回补薄弱点',
+          reason: adaptiveRecommendedResourceReason || weakPointResourceReason(firstVisibleWeakPoint),
+        }
+      : null;
+  const adaptivePlanActions =
+    controlActions.length > 0
+      ? controlActions
+      : studioPathAction
+        ? [
+            { label: '先看当前小节', reason: studioFocusStep?.section_title || scopeLabel || '把落点收清楚' },
+            studioPathAction,
+            { label: '再做一次检测', reason: '用结果决定继续还是巩固' },
+          ]
+        : weakPointAction
+          ? [
+              { label: '定位错因', reason: weakPointTitle(firstVisibleWeakPoint) },
+              weakPointAction,
+              { label: '再测一次', reason: '确认这个薄弱点是否清掉' },
+            ]
+          : [];
+  const controlWeakKeys = useMemo(
+    () => new Set(controlWeakFocus.map((item) => item?.key).filter(Boolean)),
+    [controlWeakFocus]
+  );
+  const controlWeakByKey = useMemo(() => {
+    const map = new Map();
+    controlWeakFocus.forEach((item) => {
+      if (item?.key) map.set(item.key, item);
+    });
+    return map;
+  }, [controlWeakFocus]);
+  const suggestedPathKey = controlPlan?.next?.key || controlPlan?.current?.key || studioFocusKey || '';
+  const controlResourceEvidence = Array.isArray(controlPlan?.resource_evidence)
+    ? controlPlan.resource_evidence
+    : [];
+  const studioPathEvidence = Array.isArray(studioFocusStep?.evidence) ? studioFocusStep.evidence : [];
+  const planRecommendationCopy =
+    adaptiveRecommendedResourceKey && adaptiveRecommendedResourceReason
+      ? `${adaptiveRecommendedResourceLabel}：${adaptiveRecommendedResourceReason}`
+      : adaptiveRecommendedResourceKey
+        ? `${adaptiveRecommendedResourceLabel}：根据当前进度自动推荐`
+        : '';
+  const adaptiveNextCopy = useMemo(() => {
+    if (!selectedChapterId || !selectedSectionId) return '先选择一个小节，我会根据学习记录安排下一步。';
+    const firstWeak = visibleWeakPoints[0];
+    if (firstWeak) {
+      const focus = weakPointTitle(firstWeak);
+      const detail = weakPointDetail(firstWeak);
+      return detail
+        ? `先回看「${focus}」：${detail.slice(0, 72)}。`
+        : `先回看「${focus}」，再用练习确认是否真的补上。`;
+    }
+    if (adaptiveRecommendedResourceKey) {
+      return `建议先用「${adaptiveRecommendedResourceLabel}」补齐当前小节的学习抓手。`;
+    }
+    if (currentSectionPassed) return '当前小节已通过，可以切到下一小节继续推进。';
+    if (currentSectionProgress?.quiz_pending || currentMasteryPercent >= sectionMasteryTarget) {
+      return '当前理解已经接近达标，可以进入小节测验检验。';
+    }
+    if (learnMode) return '继续完成当前带学对话，我会根据回答调整后续练习。';
+    return '可以开启 AI 带学，也可以直接自由提问当前卡点。';
+  }, [
+    adaptiveRecommendedResourceKey,
+    adaptiveRecommendedResourceLabel,
+    currentMasteryPercent,
+    currentSectionPassed,
+    currentSectionProgress,
+    learnMode,
+    sectionMasteryTarget,
+    selectedChapterId,
+    selectedSectionId,
+    visibleWeakPoints,
+  ]);
+  const resourceInsightHint = useMemo(() => {
+    const lines = [];
+    if (controlPlan?.headline) lines.push(`plan: ${controlPlan.headline}`);
+    if (controlPlan?.cue) lines.push(`next: ${controlPlan.cue}`);
+    if (adaptiveNextCopy) lines.push(`adaptive_next: ${adaptiveNextCopy}`);
+    if (studioFocusStep) {
+      lines.push(`path_focus: ${studioFocusStep.chapter_title || ''} / ${studioFocusStep.section_title || ''}`);
+      if (adaptiveRecommendedResourceKey) lines.push(`recommended_resource: ${adaptiveRecommendedResourceKey}`);
+      if (adaptiveRecommendedResourceReason) lines.push(`recommended_reason: ${adaptiveRecommendedResourceReason}`);
+      if (studioPathEvidence.length) lines.push(`path_evidence: ${studioPathEvidence.slice(0, 3).join(' / ')}`);
+    }
+    if (controlWeakFocus.length) {
+      lines.push(
+        `weak_focus: ${controlWeakFocus
+          .slice(0, 3)
+          .map((item) => `${item.title || item.key}(${item.reason || 'focus'})`)
+          .join(' / ')}`
+      );
+    }
+    if (visibleWeakPoints.length) {
+      lines.push(
+        `wrong_answer_focus: ${visibleWeakPoints
+          .slice(0, 3)
+          .map((item, index) => weakPointControlLine(item, index))
+          .join(' / ')}`
+      );
+    }
+    if (mindMapFocus.length) {
+      lines.push(`mind_map_focus: ${mindMapFocus.slice(0, 6).join(' / ')}`);
+    }
+    return lines.join('\n');
+  }, [adaptiveNextCopy, adaptiveRecommendedResourceKey, adaptiveRecommendedResourceReason, controlPlan, controlWeakFocus, mindMapFocus, studioFocusStep, studioPathEvidence, visibleWeakPoints]);
+
+  const syncStudioPracticeResult = async (payload) => {
+    const weak = Array.isArray(payload?.weak_points) ? payload.weak_points : [];
+    const targetChapterId = payload?.chapter_id || selectedChapterId;
+    const targetSectionId = payload?.section_id || selectedSectionId;
+    const targetScopeKey = targetChapterId && targetSectionId ? `${targetChapterId}|${targetSectionId}` : '';
+    setLearningInsights((prev) => ({ ...prev, weak_points: weak, weak_scope_key: targetScopeKey || prev.weak_scope_key }));
+    if (!targetChapterId || !targetSectionId) {
+      throw new Error('当前小节信息缺失，结果暂时无法同步到规划。');
+    }
+    smallQuizCacheRef.current.delete(`${targetChapterId}|${targetSectionId}`);
+    try {
+      const response = await fetch(`${API_BASE}/learning/studio/practice-result`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          subject,
+          chapter_id: targetChapterId,
+          section_id: targetSectionId,
+          score: Number(payload?.score || 0),
+          weak_points: weak,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(formatApiDetail(data) || '练习结果同步失败');
+      }
+      setLearningInsights((prev) => ({
+        ...prev,
+        control: data.control || prev.control,
+        weak_points: Array.isArray(data.weak_points) ? data.weak_points : weak,
+        weak_scope_key: targetScopeKey || scopeKeyFromControl(data.control, prev.weak_scope_key),
+      }));
+      applyControlFocus(data.control);
+      setLearningSyncNote('练习结果已进入规划，下一步会按薄弱点调整。');
+      await refreshLearningState();
+    } catch (error) {
+      throw new Error(error?.message || '练习结果同步失败');
+    }
+  };
+
+  const handleResourceFinished = async (resourceType) => {
+    const label = resourceTypeLabel[resourceType] || '学习素材';
+    setLearningSyncNote(`${label} 已进入规划，推荐顺序会自动更新。`);
+    await refreshLearningState();
   };
 
   const v29PathChapters =
@@ -3705,6 +4651,33 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
           },
         ];
 
+  const openFreshSession = () => {
+    setCurrentSessionId(null);
+    setLearnMode(false);
+    setQuizModal(null);
+    setPendingImages([]);
+    const firstChapter = catalog[0];
+    const firstSection = firstChapter?.sections?.[0];
+    if (firstChapter && firstSection) {
+      setSelectedChapterId(firstChapter.id);
+      setSelectedSectionId(firstSection.id);
+      setExpandedChapters((prev) => ({ ...prev, [firstChapter.id]: true }));
+    }
+    setMessages([welcomeMessage]);
+    setInputText('');
+    setHistoryOpen(false);
+  };
+
+  const openHistorySession = (item) => {
+    if (!item) return;
+    if (item.chapter) applySessionChapter(item.chapter);
+    setCurrentSessionId(item.id);
+    setLearnMode(item.session_kind === 'learn');
+    setQuizModal(null);
+    setPendingImages([]);
+    setHistoryOpen(false);
+  };
+
   if (studioPanel === 'resources') {
     return (
       <V29ResourceWorkspace
@@ -3714,11 +4687,16 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         chapterId={selectedChapterId}
         sectionId={selectedSectionId}
         scopeLabel={scopeLabel}
-        onBack={() => setStudioPanel('study')}
+        learningInsightHint={resourceInsightHint}
+        recommendedResourceKey={adaptiveRecommendedResourceKey}
+        onResourceFinished={(resourceType) => void handleResourceFinished(resourceType)}
+        onPracticeResult={syncStudioPracticeResult}
         onMindMapReady={(markdown) => {
           setMindMapErr('');
           setMindMapMarkdown(markdown || '');
+          setMindMapFocus(extractMindMapFocus(markdown || '', scopeLabel));
         }}
+        onBack={() => routeStudioPanel('study')}
       />
     );
   }
@@ -3744,13 +4722,25 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
 
         <main className="dp2-chat">
           <div className="dp2-study-context">
-            <span>{subject || 'MENTOR'}</span>
-            <strong>{scopeLabel || '先选一个小节，让学习有落点'}</strong>
+            <div>
+              <span>{subject || 'MENTOR'}</span>
+              <strong>{scopeLabel || '先选一个小节，让学习有落点'}</strong>
+            </div>
+            <button
+              type="button"
+              className="dp2-study-history-trigger"
+              onClick={() => setHistoryOpen(true)}
+              aria-label="打开历史记录"
+              title="打开历史记录"
+            >
+              历史记录
+            </button>
           </div>
 
           <div
             className="dp2-dialogue"
             ref={dialogueScrollRef}
+            onScroll={handleDialogueScroll}
           >
             {messages.map((m, i) => {
               const isUser = m.role === 'user';
@@ -3810,6 +4800,47 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
 
         <aside className="dp2-study-rail">
           <section className="dp2-plan">
+            {controlPlan ? (
+              <>
+                <div className="dp2-mini-label">NOW</div>
+                <h3>{controlPlan.headline || '这一刻看什么'}</h3>
+                <p>{controlPlan.cue || scopeLabel || '先选一个小节，我会把下一步拆成几步。'}</p>
+                {adaptiveNextCopy && (
+                  <div className="dp2-plan-next">
+                    <span>NEXT</span>
+                    <p>{adaptiveNextCopy}</p>
+                  </div>
+                )}
+                {planRecommendationCopy && (
+                  <div className="dp2-plan-recommendation">
+                    <span>WHY</span>
+                    <p>{planRecommendationCopy}</p>
+                  </div>
+                )}
+                {learningSyncNote && (
+                  <div className="dp2-plan-sync">
+                    <span>SYNC</span>
+                    <p>{learningSyncNote}</p>
+                  </div>
+                )}
+                <ol>
+                  {(adaptivePlanActions.length
+                    ? adaptivePlanActions
+                    : [
+                        { label: '抓主线', reason: '先看懂最关键的点' },
+                        { label: '补薄弱', reason: '再处理容易卡住的地方' },
+                        { label: '做检测', reason: '最后用题目确认理解' },
+                      ]
+                  ).map((action, index) => (
+                    <li key={`${action.type || action.label || 'step'}-${index}`}>
+                      {action.label || action.type}
+                      {action.reason ? `：${action.reason}` : ''}
+                    </li>
+                  ))}
+                </ol>
+              </>
+            ) : (
+              <>
             <div className="dp2-mini-label">NOW</div>
             <h3>这一刻看什么</h3>
             <p>
@@ -3824,13 +4855,69 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
               <li>再换个画面理解</li>
               <li>最后用小练习确认</li>
             </ol>
+            {adaptiveNextCopy && (
+              <div className="dp2-plan-next">
+                <span>NEXT</span>
+                <p>{adaptiveNextCopy}</p>
+              </div>
+            )}
+            {planRecommendationCopy && (
+              <div className="dp2-plan-recommendation">
+                <span>WHY</span>
+                <p>{planRecommendationCopy}</p>
+              </div>
+            )}
+            {learningSyncNote && (
+              <div className="dp2-plan-sync">
+                <span>SYNC</span>
+                <p>{learningSyncNote}</p>
+              </div>
+            )}
+              </>
+            )}
+            {visibleWeakPoints.length > 0 && (
+              <div className="dp2-weak-points dp2-plan-weak-points">
+                <span>FOCUS</span>
+                {visibleWeakPoints.slice(0, 3).map((item, index) => (
+                  <p key={`${item.section || 'weak'}-${index}`}>
+                    <strong>{weakPointTitle(item)}</strong>
+                    {weakPointDetail(item) ? <small>{weakPointDetail(item)}</small> : null}
+                  </p>
+                ))}
+              </div>
+            )}
+            {controlResourceEvidence.length > 0 && (
+              <div className="dp2-plan-evidence">
+                <span>TRACE</span>
+                {controlResourceEvidence.slice(0, 3).map((event, index) => (
+                  <p key={`${event.resource_type || 'event'}-${event.created_at || index}`}>
+                    <b>{event.resource_type || 'resource'}</b>
+                    {event.summary ? ` · ${String(event.summary).slice(0, 64)}` : ''}
+                  </p>
+                ))}
+              </div>
+            )}
+            {studioPathEvidence.length > 0 && (
+              <div className="dp2-plan-evidence">
+                <span>PATH</span>
+                {studioPathEvidence.slice(0, 3).map((item, index) => (
+                  <p key={`${item}-${index}`}>{item}</p>
+                ))}
+              </div>
+            )}
+            {studioPathErr && (
+              <div className="dp2-plan-evidence">
+                <span>PATH</span>
+                <p>{studioPathErr}</p>
+              </div>
+            )}
           </section>
 
           <div className="dp2-rail-actions">
             <V29Button quiet onClick={() => void prepareSmallQuiz()} disabled={isLoading || !canPrepareSmallQuiz}>
               试一试
             </V29Button>
-            <V29Button quiet onClick={() => setStudioPanel('resources')}>
+            <V29Button quiet onClick={() => routeStudioPanel('resources')}>
               学习素材
             </V29Button>
             <V29Button quiet onClick={onBack}>回到地图</V29Button>
@@ -3845,7 +4932,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
               !catalogErr &&
               v29PathChapters.map((chapter, chapterIndex) => {
                 const open = chapter.fallback || expandedChapters[chapter.key] || chapter.sections.some((item) => item.chapter?.id === selectedChapterId);
-                const passedCount = chapter.sections.filter((item) => progress.sections?.[item.key]?.small_quiz_passed).length;
+                const passedCount = chapter.sections.filter((item) => isSectionEffectivelyPassed(progress.sections?.[item.key])).length;
                 return (
                   <div className={`dp2-path-chapter ${open ? 'is-open' : ''}`} key={chapter.key} style={{ animationDelay: `${chapterIndex * 90}ms` }}>
                     <button
@@ -3864,6 +4951,12 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
                       <div className="dp2-path-section-list">
                         {chapter.sections.map((item, index) => {
                           const active = item.chapter?.id === selectedChapterId && item.section?.id === selectedSectionId;
+                          const isControlCurrent = suggestedPathKey === item.key;
+                          const isWeakFocus = controlWeakKeys.has(item.key);
+                          const pathStep = item.fallbackIndex == null ? studioPathStepByKey.get(item.key) : null;
+                          const controlWeak = item.fallbackIndex == null ? controlWeakByKey.get(item.key) : null;
+                          const pathReason = pathStep?.recommended_reason || controlWeak?.recommended_reason || controlWeak?.reason || '';
+                          const showPathReason = item.fallbackIndex == null && (isControlCurrent || isWeakFocus || active) && pathReason;
                           const status =
                             item.fallbackIndex != null
                               ? item.fallbackIndex < 2
@@ -3871,30 +4964,38 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
                                 : item.fallbackIndex === 2
                                   ? '正在看'
                                   : '待点亮'
-                              : progress.sections?.[item.key]?.small_quiz_passed
+                              : isSectionEffectivelyPassed(progress.sections?.[item.key])
                                 ? '已点亮'
                                 : active
                                   ? '正在看'
                                   : '待点亮';
+                          const smartStatus =
+                            item.fallbackIndex == null && isControlCurrent
+                              ? '建议下一步'
+                              : item.fallbackIndex == null && isWeakFocus
+                                ? '重点补'
+                                : status;
                           return (
                             <button
                               key={item.key}
                               type="button"
-                              className={`dp2-path-item ${active ? 'is-active' : ''}`}
+                              className={`dp2-path-item ${active ? 'is-active' : ''} ${isControlCurrent ? 'is-suggested' : ''} ${isWeakFocus ? 'is-weak' : ''}`}
                               style={{ animationDelay: `${index * 55}ms` }}
+                              title={showPathReason ? pathReason : undefined}
                               onClick={() => {
                                 if (!item.chapter || !item.section) return;
-                                setLearnMode(false);
                                 setSelectedChapterId(item.chapter.id);
                                 setSelectedSectionId(item.section.id);
                                 setExpandedChapters((prev) => ({ ...prev, [item.chapter.id]: true }));
                                 const matched = sessions.filter((s) => s.chapter === item.key);
+                                setLearnMode(matched[0]?.session_kind === 'learn');
                                 setCurrentSessionId(matched[0]?.id ?? null);
                               }}
                             >
                               <span />
                               <strong>{item.title}</strong>
-                              <small>{status}</small>
+                              <small>{smartStatus}</small>
+                              {showPathReason && <em>{pathReason}</em>}
                             </button>
                           );
                         })}
@@ -3907,10 +5008,111 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
         </aside>
       </div>
 
-      {quizModal && quizQuestions.length > 0 && (
+      {historyOpen && (
+        <div className="dp2-history-layer" role="dialog" aria-modal="true" aria-label="历史记录">
+          <button
+            type="button"
+            className="dp2-history-scrim"
+            aria-label="关闭历史记录"
+            onClick={() => setHistoryOpen(false)}
+          />
+          <section className="dp2-history-panel">
+            <header className="dp2-history-head">
+              <div>
+                <span>HISTORY</span>
+                <h3>历史记录</h3>
+                <p>回到之前的学习线索，或重新开一段对话。</p>
+              </div>
+              <button type="button" className="dp2-history-close" onClick={() => setHistoryOpen(false)}>
+                关闭
+              </button>
+            </header>
+
+            <div className="dp2-history-tools">
+              <button type="button" className="dp2-history-new" onClick={openFreshSession}>
+                新建对话
+              </button>
+              <label className="dp2-history-search">
+                <span>搜索</span>
+                <input
+                  value={sessionQuery}
+                  onChange={(event) => setSessionQuery(event.target.value)}
+                  placeholder="标题、内容或章节"
+                />
+              </label>
+            </div>
+
+            <div className="dp2-history-list">
+              {sessionLoading && <p className="dp2-history-state">正在整理记录...</p>}
+              {!sessionLoading && sessionError && <p className="dp2-history-state is-error">{sessionError}</p>}
+              {!sessionLoading && !sessionError && filteredSessions.length === 0 && (
+                <p className="dp2-history-state">还没有可显示的记录。</p>
+              )}
+              {!sessionLoading &&
+                !sessionError &&
+                filteredSessions.map((item) => {
+                  const active = Number(currentSessionId) === Number(item.id);
+                  const busy = deletingSessionId === item.id;
+                  const chapterLabel = (item.chapter || '').includes('|') ? (item.chapter || '').replace('|', ' · ') : item.chapter || '';
+
+                  return (
+                    <article className={`dp2-history-item ${active ? 'is-active' : ''}`} key={item.id}>
+                      <button type="button" onClick={() => openHistorySession(item)}>
+                        <span>{item.subject || subject}</span>
+                        <strong>{previewText(item.title || '新对话')}</strong>
+                        {chapterLabel && <small>{previewText(chapterLabel)}</small>}
+                        {item.preview && <p>{previewText(item.preview)}</p>}
+                      </button>
+                      <div className="dp2-history-meta">
+                        <time>{sessionDate(item.updated_at)}</time>
+                        <button
+                          type="button"
+                          disabled={busy || deletingSessionId != null}
+                          onClick={() => void deleteSession(item.id)}
+                        >
+                          {busy ? '删除中' : '删除'}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {quizModal && (quizModal.loading || quizQuestions.length > 0) && (
         <div className="dp2-functional-modal" role="dialog" aria-modal="true">
-          {!quizResult ? (
+          {quizModal.loading ? (
+            <div className="dp2-quiz dp2-quiz-loading">
+              <button
+                type="button"
+                className="dp2-modal-close"
+                aria-label="关闭练习"
+                onClick={() => setQuizModal(null)}
+              >
+                关闭
+              </button>
+              <section className="dp2-section-title">
+                <div className="dp2-mini-label">CHECK</div>
+                <h2>正在铺开练习卷</h2>
+                <p>题目已经在后台准备，稍等片刻就能开始。</p>
+              </section>
+              <div className="dp2-quiz-loading-line" aria-hidden>
+                <span />
+              </div>
+              <V29Button quiet onClick={() => setQuizModal(null)}>先返回</V29Button>
+            </div>
+          ) : !quizResult ? (
             <div className="dp2-quiz">
+              <button
+                type="button"
+                className="dp2-modal-close"
+                aria-label="关闭练习"
+                onClick={() => setQuizModal(null)}
+              >
+                关闭
+              </button>
               <section className="dp2-section-title">
                 <div className="dp2-mini-label">CHECK</div>
                 <h2>{quizModal.type === 'small' ? '小节练习' : '整章回看'}</h2>
@@ -3919,26 +5121,96 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
               <section className="dp2-quiz-board">
                 <article className="dp2-quiz-focus">
                   <span>{`第 ${quizIndex + 1} 题 / 共 ${quizQuestions.length} 题`}</span>
+                  <small className="dp2-quiz-type">
+                    {assessmentTypeLabel(currentQuizQuestion?.type)} · {currentQuizQuestion?.points || 1} 分
+                  </small>
                   <h3>{currentQuizQuestion?.question}</h3>
-                  <div className="dp2-options">
-                    {(currentQuizQuestion?.options || []).map((option, index) => (
-                      <button
-                        key={option}
-                        type="button"
-                        className={quizPicks[quizIndex] === index ? 'is-selected' : ''}
-                        onClick={() =>
+                  {currentQuizQuestion?.type === 'fill_blank' ? (
+                    <label className="dp2-quiz-text-answer">
+                      <span>填写答案</span>
+                      <input
+                        value={typeof quizPicks[quizIndex] === 'string' ? quizPicks[quizIndex] : ''}
+                        onChange={(event) =>
                           setQuizPicks((prev) => {
                             const next = [...prev];
-                            next[quizIndex] = index;
+                            next[quizIndex] = event.target.value;
                             return next;
                           })
                         }
-                      >
-                        <span>{String.fromCharCode(65 + index)}</span>
-                        {option}
-                      </button>
-                    ))}
-                  </div>
+                        placeholder="填写关键词"
+                      />
+                    </label>
+                  ) : currentQuizQuestion?.type === 'short_answer' ? (
+                    <label className="dp2-quiz-text-answer is-long">
+                      <span>简答</span>
+                      <textarea
+                        value={typeof quizPicks[quizIndex] === 'string' ? quizPicks[quizIndex] : ''}
+                        onChange={(event) =>
+                          setQuizPicks((prev) => {
+                            const next = [...prev];
+                            next[quizIndex] = event.target.value;
+                            return next;
+                          })
+                        }
+                        placeholder="结合本节资料，用自己的话作答"
+                        rows={6}
+                      />
+                    </label>
+                  ) : currentQuizQuestion?.type === 'true_false' ? (
+                    <div className="dp2-options is-judge">
+                      {[true, false].map((value) => (
+                        <button
+                          key={String(value)}
+                          type="button"
+                          className={quizPicks[quizIndex] === value ? 'is-selected' : ''}
+                          onClick={() =>
+                            setQuizPicks((prev) => {
+                              const next = [...prev];
+                              next[quizIndex] = value;
+                              return next;
+                            })
+                          }
+                        >
+                          <span>{value ? '✓' : '×'}</span>
+                          {value ? '正确' : '错误'}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="dp2-options">
+                      {(currentQuizQuestion?.options || []).map((option, index) => {
+                        const isMulti = currentQuizQuestion?.type === 'multi';
+                        const selected = isMulti
+                          ? Array.isArray(quizPicks[quizIndex]) && quizPicks[quizIndex].includes(index)
+                          : quizPicks[quizIndex] === index;
+                        return (
+                          <button
+                            key={option}
+                            type="button"
+                            className={selected ? 'is-selected' : ''}
+                            onClick={() =>
+                              setQuizPicks((prev) => {
+                                const next = [...prev];
+                                if (!isMulti) {
+                                  next[quizIndex] = index;
+                                  return next;
+                                }
+                                const values = Array.isArray(next[quizIndex]) ? [...next[quizIndex]] : [];
+                                const found = values.indexOf(index);
+                                if (found >= 0) values.splice(found, 1);
+                                else values.push(index);
+                                next[quizIndex] = values;
+                                return next;
+                              })
+                            }
+                          >
+                            <span>{String.fromCharCode(65 + index)}</span>
+                            {option}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                   <footer className="dp2-quiz-actions">
                     <V29Button quiet onClick={() => setQuizIndex((n) => Math.max(0, n - 1))} disabled={quizIndex === 0}>
                       上一题
@@ -3968,7 +5240,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
                         key={index}
                         type="button"
                         data-quiz-index={index}
-                        className={`${quizPicks[index] >= 0 ? 'is-done' : ''} ${index === quizIndex ? 'is-now' : ''} ${distance === 1 ? 'is-near' : ''}`}
+                        className={`${isAssessmentAnswered(q, quizPicks[index]) ? 'is-done' : ''} ${index === quizIndex ? 'is-now' : ''} ${distance === 1 ? 'is-near' : ''}`}
                         onClick={() => setQuizIndex(index)}
                       >
                         <i />
@@ -3982,12 +5254,23 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
             </div>
           ) : (
             <div className="dp2-result">
+              <button
+                type="button"
+                className="dp2-modal-close"
+                aria-label="关闭结果"
+                onClick={() => setQuizModal(null)}
+              >
+                关闭
+              </button>
               <section className="dp2-result-hero">
                 <div className="dp2-mini-label">REVIEW</div>
                 <h2>回看结果</h2>
-                <p>{quizResult.passed ? '这一轮已经过关，可以继续往前。' : '还差一点，我会带你把薄弱处补上。'}</p>
+                <p>
+                  得分 {Math.round(quizResult.score || 0)} 分 · 正确 {quizResult.correct || 0} 题 ·
+                  错误或需补充 {quizResult.incorrect ?? Math.max(0, (quizResult.total || 0) - (quizResult.correct || 0))} 题
+                </p>
                 <div className="dp2-result-orbit" aria-hidden>
-                  <span>{quizResult.passed ? '已掌握' : '需巩固'}</span>
+                  <span>{Math.round(quizResult.score || 0)}分</span>
                 </div>
               </section>
               <section className="dp2-result-board">
@@ -3997,10 +5280,16 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
                   <i className="is-miss" />
                 </div>
                 <div className="dp2-result-list">
-                  {(quizResult.items || []).slice(0, 3).map((item, index) => (
+                  {(quizResult.items || []).map((item, index) => (
                     <article key={index} className={`dp2-result-card ${item.is_correct ? 'is-ok' : 'is-miss'}`}>
-                      <span>{item.is_correct ? '点亮' : '补光'}</span>
-                      <p>{item.explanation || item.question}</p>
+                      <span>
+                        {String(index + 1).padStart(2, '0')} · {assessmentTypeLabel(item.type)} ·
+                        {' '}{item.awarded_points ?? 0}/{item.points ?? 1} 分
+                      </span>
+                      <h4>{item.question}</h4>
+                      <p><strong>你的答案：</strong>{item.selected_answer || '未作答'}</p>
+                      <p><strong>正确答案：</strong>{item.correct_answer || '—'}</p>
+                      <p className="dp2-result-explanation">{item.explanation || '请回到本节资料核对这个知识点。'}</p>
                     </article>
                   ))}
                 </div>
@@ -4012,7 +5301,26 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
                     <li>再做一题相近的小练习</li>
                     <li>最后重新试一轮回看</li>
                   </ol>
+                  {quizWeakPoints.length > 0 && (
+                    <div className="dp2-weak-points">
+                      <span>重点补</span>
+                      {quizWeakPoints.slice(0, 3).map((item) => (
+                        <p key={`${item.index}-${item.question}`}>
+                          {item.section || `Q${item.index}`}：{item.question}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                   <div className="dp2-actions">
+                    {quizResultDownload && (
+                      <a
+                        className="dp2-button is-quiet"
+                        href={quizResultDownload.href}
+                        download={quizResultDownload.filename}
+                      >
+                        <span>导出详细解析</span>
+                      </a>
+                    )}
                     <V29Button onClick={() => setQuizModal(null)}>继续往前</V29Button>
                   </div>
                 </aside>
@@ -4285,7 +5593,11 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
               ) : (
                 <button
                   type="button"
-                  onClick={() => setLearnMode(false)}
+                  onClick={() => {
+                    setLearnMode(false);
+                    setCurrentSessionId(null);
+                    preferUiOverHistoryUntilRef.current = null;
+                  }}
                   className="rounded-sm border border-[#1a1f24]/15 bg-white px-3 py-1.5 text-[11px] font-semibold text-[#1a1f24]/70 hover:bg-[#f6f4ef]"
                 >
                   结束带学
@@ -4297,7 +5609,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
                 disabled={isLoading || !canPrepareSmallQuiz}
                 className="rounded-sm border border-[#1a1f24]/15 bg-white px-3 py-1.5 text-[11px] font-semibold text-[#1a1f24]/68 transition-colors hover:border-[#b8955c]/45 hover:bg-[#faf6ef] disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {currentSectionProgress?.quiz_pending ? '继续小节测验' : currentSectionProgress?.small_quiz_passed ? '小节已通过' : '直接小节测验'}
+                {currentSectionProgress?.quiz_pending ? '继续小节测验' : currentSectionPassed ? '小节已通过' : currentSectionNeedsReview ? '回补后复测' : '直接小节测验'}
               </button>
             </div>
 
@@ -4440,7 +5752,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
                   const sections = chapter.sections || [];
                   const chapterDone =
                     sections.length > 0 &&
-                    sections.every((s) => progress.sections?.[`${chapter.id}|${s.id}`]?.small_quiz_passed);
+                    sections.every((s) => isSectionEffectivelyPassed(progress.sections?.[`${chapter.id}|${s.id}`]));
 
                   return (
                     <div
@@ -4472,21 +5784,29 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
                             const sk = `${chapter.id}|${sec.id}`;
                             const active = selectedChapterId === chapter.id && selectedSectionId === sec.id;
                             const st = progress.sections?.[sk];
-                            const dotClass = st?.small_quiz_passed
+                            const sectionPassed = isSectionEffectivelyPassed(st);
+                            const sectionNeedsReview = Boolean(st?.needs_review || (st?.weak_points || []).length);
+                            const dotClass = sectionPassed
                               ? 'bg-emerald-600/85'
+                              : sectionNeedsReview
+                                ? 'bg-rose-500/85'
                               : (st?.learn_turns || 0) > 0
                                 ? 'bg-amber-500/90'
                                 : 'bg-[#1a1f24]/18';
                             const masteryPct = Math.round(Math.max(0, Math.min(1, Number(st?.mastery || 0))) * 100);
-                            const sectionStatusLabel = st?.small_quiz_passed
+                            const sectionStatusLabel = sectionPassed
                               ? '已通过'
+                              : sectionNeedsReview
+                                ? '需回补'
                               : st?.quiz_pending
                                 ? '待测验'
                                 : (st?.learn_turns || 0) > 0
                                   ? `${masteryPct}%`
                                   : '未开始';
-                            const sectionStatusClass = st?.small_quiz_passed
+                            const sectionStatusClass = sectionPassed
                               ? 'bg-emerald-50 text-emerald-800'
+                              : sectionNeedsReview
+                                ? 'bg-rose-50 text-rose-800'
                               : st?.quiz_pending
                                 ? 'bg-amber-50 text-amber-900'
                                 : 'bg-[#1a1f24]/[0.05] text-[#1a1f24]/45';
@@ -4495,10 +5815,10 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
                                 key={sec.id}
                                 type="button"
                                 onClick={() => {
-                                  setLearnMode(false);
                                   setSelectedChapterId(chapter.id);
                                   setSelectedSectionId(sec.id);
                                   const matched = sessions.filter((s) => s.chapter === sk);
+                                  setLearnMode(matched[0]?.session_kind === 'learn');
                                   setCurrentSessionId(matched[0]?.id ?? null);
                                 }}
                                 className={`flex w-full items-center justify-between gap-2 rounded-sm px-3 py-2.5 text-left text-[12px] transition-all ${
@@ -4511,7 +5831,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
                                 <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold ${sectionStatusClass}`}>
                                   {sectionStatusLabel}
                                 </span>
-                                <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} title={st?.small_quiz_passed ? '小节测验已通过' : '未完成小节测验'} />
+                                <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} title={sectionPassed ? '小节测验已通过' : sectionNeedsReview ? '有薄弱点需要回补' : '未完成小节测验'} />
                               </button>
                             );
                           })}
@@ -4549,6 +5869,10 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
                 chapterId={selectedChapterId}
                 sectionId={selectedSectionId}
                 scopeLabel={scopeLabel}
+                learningInsightHint={resourceInsightHint}
+                recommendedResourceKey={adaptiveRecommendedResourceKey}
+                onResourceFinished={(resourceType) => void handleResourceFinished(resourceType)}
+                onPracticeResult={syncStudioPracticeResult}
               />
             )}
 
@@ -4560,7 +5884,7 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
           </div>
       </aside>
 
-      {quizModal && quizModal.questions?.length > 0 && (
+      {false && quizModal && quizModal.questions?.length > 0 && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4" role="dialog" aria-modal="true">
           <div className="max-h-[min(90vh,720px)] w-full max-w-2xl overflow-y-auto rounded-xl border border-[#1a1f24]/10 bg-[#faf9f7] p-6 shadow-2xl">
             <h3 className="font-display text-lg text-[#1a1f24]">
@@ -4678,20 +6002,61 @@ const ChatView = ({ subject, username, onBack, onSwitchAccount, initialMode = 'f
 };
 
 export default function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState(localStorage.getItem('currentUser') || '');
-  const [appStep, setAppStep] = useState(localStorage.getItem('currentUser') ? 'subjects' : 'login');
-  const [selectedSubject, setSelectedSubject] = useState(null);
-  const [selectedStudyMode, setSelectedStudyMode] = useState('free');
+  const [appStep, setAppStep] = useState(() =>
+    routeStepFromPath(location.pathname, Boolean(localStorage.getItem('currentUser')))
+  );
+  const [selectedSubject, setSelectedSubject] = useState(() => new URLSearchParams(location.search).get('subject') || null);
+  const [selectedStudyMode, setSelectedStudyMode] = useState(() =>
+    new URLSearchParams(location.search).get('mode') === 'guided' ? 'guided' : 'free'
+  );
+  const [openHistoryOnEnter, setOpenHistoryOnEnter] = useState(false);
   const [introDone, setIntroDone] = useState(false);
-  const isDesignPreview =
-    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'design';
+  const isDesignPreview = new URLSearchParams(location.search).get('preview') === 'design';
+
+  useEffect(() => {
+    if (isDesignPreview) return;
+
+    if (!currentUser) {
+      const loginTarget = new URLSearchParams(location.search).get('reset') === '1'
+        ? `/login${location.search}`
+        : '/login';
+      if (!location.pathname.startsWith('/login')) navigate(loginTarget, { replace: true });
+      setAppStep((prev) => (prev === 'login' ? prev : 'login'));
+      return;
+    }
+
+    const routeStep = routeStepFromPath(location.pathname, true);
+    const nextStep = routeStep === 'login' ? 'subjects' : routeStep;
+    if ((location.pathname === '/' || location.pathname.startsWith('/login')) && nextStep === 'subjects') {
+      navigate('/courses', { replace: true });
+    }
+    setAppStep((prev) => (prev === nextStep ? prev : nextStep));
+
+    if (nextStep === 'chat') {
+      const params = new URLSearchParams(location.search);
+      const routeSubject = params.get('subject');
+      const routeMode = params.get('mode') === 'guided' ? 'guided' : 'free';
+      if (routeSubject) setSelectedSubject((prev) => (prev === routeSubject ? prev : routeSubject));
+      if (!routeSubject && !selectedSubject) {
+        setAppStep('subjects');
+        navigate('/courses', { replace: true });
+        return;
+      }
+      setSelectedStudyMode((prev) => (prev === routeMode ? prev : routeMode));
+    }
+  }, [currentUser, isDesignPreview, location.pathname, location.search, navigate, selectedSubject]);
 
   const handleSwitchAccount = () => {
     localStorage.removeItem('currentUser');
     setCurrentUser('');
     setSelectedSubject(null);
     setSelectedStudyMode('free');
+    setOpenHistoryOnEnter(false);
     setAppStep('login');
+    navigate('/login', { replace: true });
   };
 
   if (isDesignPreview) {
@@ -4706,7 +6071,10 @@ export default function App() {
           type="button"
           className="dp2-brand"
           onClick={() => {
-            if (currentUser) setAppStep('subjects');
+            if (currentUser) {
+              setAppStep('subjects');
+              navigate('/courses');
+            }
           }}
         >
           <strong>Mentor</strong>
@@ -4720,6 +6088,7 @@ export default function App() {
             localStorage.setItem('currentUser', name);
             setCurrentUser(name);
             setAppStep('subjects');
+            navigate('/courses', { replace: true });
           }}
         />
       )}
@@ -4731,7 +6100,9 @@ export default function App() {
           onSelectSubject={(n, mode = 'free') => {
             setSelectedSubject(n);
             setSelectedStudyMode(mode === 'guided' ? 'guided' : 'free');
+            setOpenHistoryOnEnter(false);
             setAppStep('chat');
+            navigate(buildStudyPath({ subject: n, mode: mode === 'guided' ? 'guided' : 'free', panel: 'study' }));
           }}
           onSwitchAccount={handleSwitchAccount}
         />
@@ -4742,7 +6113,12 @@ export default function App() {
           subject={selectedSubject}
           username={currentUser}
           initialMode={selectedStudyMode}
-          onBack={() => setAppStep('subjects')}
+          initialOpenHistory={openHistoryOnEnter}
+          onInitialHistoryHandled={() => setOpenHistoryOnEnter(false)}
+          onBack={() => {
+            setAppStep('subjects');
+            navigate('/courses');
+          }}
           onSwitchAccount={handleSwitchAccount}
         />
       )}

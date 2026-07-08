@@ -40,6 +40,14 @@ from agents_workspace import (
     default_portrait,
 )
 from dl_book_data import DL_COURSE
+from quiz_runtime import (
+    answer_summary as quiz_answer_summary,
+    build_instant_paper,
+    has_internal_scaffolding as quiz_has_internal_scaffolding,
+    normalize_questions as normalize_mixed_quiz_questions,
+    public_questions as public_quiz_questions,
+    score_answer as score_quiz_answer,
+)
 from safety import (
     ANTI_HALLUCINATION_SYSTEM_SUFFIX,
     assert_user_content_safe,
@@ -203,6 +211,7 @@ class SectionLearningProgressDB(Base):
     learn_turns: Mapped[int] = mapped_column(Integer, default=0)
     phase: Mapped[str] = mapped_column(String(24), default="idle")  # idle questioning quiz_pending done
     pending_quiz_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    weak_points_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     section_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     small_quiz_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     small_quiz_passed: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -246,6 +255,8 @@ class UserLearningStudioDB(Base):
     subject: Mapped[str] = mapped_column(String(64), index=True)
     portrait_json: Mapped[str] = mapped_column(Text, default="{}")
     learning_path_json: Mapped[str] = mapped_column(Text, default="[]")
+    resource_events_json: Mapped[str] = mapped_column(Text, default="[]")
+    resource_artifacts_json: Mapped[str] = mapped_column(Text, default="[]")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -261,6 +272,21 @@ class PasswordResetTokenDB(Base):
 # --- 初始化与工具 ---
 def ensure_schema():
     Base.metadata.create_all(bind=engine)
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "section_learning_progress" in table_names:
+        progress_cols = {c["name"] for c in inspector.get_columns("section_learning_progress")}
+        if "weak_points_json" not in progress_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE section_learning_progress ADD COLUMN weak_points_json TEXT"))
+    if "user_learning_studio" in table_names:
+        studio_cols = {c["name"] for c in inspector.get_columns("user_learning_studio")}
+        if "resource_events_json" not in studio_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE user_learning_studio ADD COLUMN resource_events_json TEXT DEFAULT '[]'"))
+        if "resource_artifacts_json" not in studio_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE user_learning_studio ADD COLUMN resource_artifacts_json TEXT DEFAULT '[]'"))
     # 以下 ALTER 仅针对旧版 SQLite 库；Postgres 由 create_all 一次性建全表
     if engine.dialect.name != "sqlite":
         return
@@ -1558,11 +1584,44 @@ def _learn_extract_meta_json(
     user_e = (
         f"【学习范围】{scope_label}\n【学员最新作答】\n{user_answer[:4000]}\n\n【教员本轮讲解】\n{excerpt}"
     )
+    sys_e += (
+        "\nAlso include weak_points as an array. Each item must contain section, question, and reason. "
+        "Only add weak_points when the learner shows misunderstanding, missing conditions, weak transfer, or incomplete expression; otherwise return an empty array."
+    )
     raw = _learn_chat_complete(
         [{"role": "system", "content": sys_e}, {"role": "user", "content": user_e}],
         temperature=0.1,
     )
     return _parse_json_object_from_llm(raw)
+
+
+def _ask_extract_learning_signal(answer_md: str, user_question: str, scope_label: str) -> Dict[str, Any]:
+    """Extract a light learning signal from free-form Q&A without turning it into guided mode."""
+    sys_p = (
+        "你是学习状态观察模块。根据【用户问题】和【回答】输出**仅一个 JSON 对象**，不要 markdown。\n"
+        "字段："
+        '{"weak_points":[{"section":"小节或概念","question":"暴露的疑问","reason":"为什么需要回补"}],'
+        '"summary":"60字内学习观察","needs_practice":true或false}\n'
+        "只在用户明确表现出混淆、误解、缺少条件、迁移困难、反复分不清概念时写 weak_points；"
+        "普通求解释但没有薄弱迹象时 weak_points 返回空数组。最多 3 个弱点。"
+    )
+    user_p = (
+        f"【学习范围】{scope_label}\n"
+        f"【用户问题】\n{(user_question or '')[:3000]}\n\n"
+        f"【回答】\n{(answer_md or '')[:7000]}"
+    )
+    raw = _learn_chat_complete(
+        [{"role": "system", "content": sys_p}, {"role": "user", "content": user_p}],
+        temperature=0.1,
+    )
+    data = _parse_json_object_from_llm(raw)
+    weak_points = data.get("weak_points") if isinstance(data, dict) else []
+    if not isinstance(weak_points, list):
+        weak_points = []
+    data["weak_points"] = weak_points[:3]
+    data["summary"] = str(data.get("summary") or "")[:300]
+    data["needs_practice"] = bool(data.get("needs_practice") or weak_points)
+    return data
 
 
 def _parse_json_object_from_llm(raw: str) -> Dict[str, Any]:
@@ -1593,33 +1652,7 @@ def _parse_json_array_from_llm(raw: str) -> list[Any]:
 
 
 def _normalize_small_quiz_questions(raw_questions: list[Any]) -> list[Dict[str, Any]]:
-    normalized: list[Dict[str, Any]] = []
-    for item in raw_questions:
-        if not isinstance(item, dict):
-            continue
-        question = str(item.get("question") or "").strip()
-        options = item.get("options")
-        if not question or not isinstance(options, list) or len(options) < 4:
-            continue
-        try:
-            correct_index = int(item.get("correct_index", -1))
-        except Exception:
-            correct_index = -1
-        if correct_index < 0 or correct_index > 3:
-            continue
-        normalized.append(
-            {
-                "question": question[:800],
-                "options": [str(x).strip()[:300] for x in options[:4]],
-                "correct_index": correct_index,
-                "explanation": str(item.get("explanation") or item.get("analysis") or "此题用于检验本小节核心概念，正确答案见上方选项。").strip()[:1000],
-            }
-        )
-        if len(normalized) >= SMALL_QUIZ_QUESTION_COUNT:
-            break
-    if len(normalized) < SMALL_QUIZ_QUESTION_COUNT:
-        raise ValueError(f"small quiz must contain {SMALL_QUIZ_QUESTION_COUNT} valid questions")
-    return normalized
+    return normalize_mixed_quiz_questions(raw_questions, limit=SMALL_QUIZ_QUESTION_COUNT)
 
 
 def _generate_small_quiz_for_section(
@@ -1627,33 +1660,9 @@ def _generate_small_quiz_for_section(
     scope_label: str,
     ref_excerpt: str,
     section_summary: str = "",
+    weak_points: Optional[list[Dict[str, Any]]] = None,
 ) -> list[Dict[str, Any]]:
-    sys_q = (
-        f"你是「{subject}」课程测验设计教师。请根据当前小节资料生成小节测验。\n"
-        f"输出**仅一个 JSON 数组**（不要 markdown 围栏），长度恰好为 {SMALL_QUIZ_QUESTION_COUNT}。\n"
-        "每项字段：question、options（4 个选项）、correct_index（0-3）、explanation（中文解析，解释为什么正确）。\n"
-        "题目必须覆盖本小节核心概念，难度适合作为跳过带学后的准入测验；"
-        "不得考资料中没有出现的事实。"
-    )
-    user_q = (
-        f"【小节】{scope_label}\n"
-        f"【已有小结】\n{section_summary[:2500] or '暂无，按资料命题。'}\n\n"
-        f"【资料】\n{(ref_excerpt or '')[:12000]}"
-    )
-    raw = _learn_chat_complete(
-        [{"role": "system", "content": sys_q}, {"role": "user", "content": user_q}],
-        temperature=0.25,
-    )
-    try:
-        arr = _parse_json_array_from_llm(raw)
-    except Exception:
-        obj = _parse_json_object_from_llm(raw)
-        if isinstance(obj, dict) and isinstance(obj.get("questions"), list):
-            arr = obj["questions"]
-        else:
-            raise
-    return _normalize_small_quiz_questions(arr)
-
+    return build_instant_paper(subject, scope_label, ref_excerpt, section_summary, weak_points=weak_points)
 
 def _get_or_create_section_progress(
     db: Session, user_id: int, subject: str, chapter_id: str, section_id: str
@@ -1727,7 +1736,7 @@ def _all_sections_quiz_passed(db: Session, user_id: int, subject: str, chapter_i
             )
             .first()
         )
-        if not pr or not pr.small_quiz_passed:
+        if not _section_effectively_passed(pr):
             return False
     return True
 
@@ -1950,12 +1959,22 @@ class StudioResourceStreamBody(BaseModel):
     extra_hint: str = Field(default="", max_length=2000)
 
 
+class StudioPracticeResultBody(BaseModel):
+    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
+    subject: str = Field(..., min_length=1, max_length=64)
+    chapter_id: str = Field(..., min_length=1, max_length=64)
+    section_id: str = Field(..., min_length=1, max_length=64)
+    score: float = Field(default=0)
+    weak_points: List[Dict[str, Any]] = Field(default_factory=list, max_length=12)
+
+
 class SmallQuizSubmitBody(BaseModel):
     username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
     subject: str = Field(..., min_length=1, max_length=64)
     chapter_id: str = Field(..., min_length=1, max_length=64)
     section_id: str = Field(..., min_length=1, max_length=64)
-    answers: List[int] = Field(..., min_length=1, max_length=30)
+    answers: List[Any] = Field(..., min_length=1, max_length=30)
+    session_id: Optional[int] = None
 
 
 class SmallQuizPrepareBody(BaseModel):
@@ -1976,7 +1995,8 @@ class ChapterQuizSubmitBody(BaseModel):
     username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN)
     subject: str = Field(..., min_length=1, max_length=64)
     chapter_id: str = Field(..., min_length=1, max_length=64)
-    answers: List[int] = Field(..., min_length=1, max_length=24)
+    answers: List[Any] = Field(..., min_length=1, max_length=24)
+    session_id: Optional[int] = None
 
 
 def clean_model_math_artifacts(text: str) -> str:
@@ -2049,6 +2069,66 @@ def session_to_dict(session: ChatSessionDB, last_message: str = ""):
         "updated_at": session.updated_at.isoformat() if session.updated_at else None,
         "preview": last_message,
     }
+
+
+def _append_quiz_history_snapshot(
+    db: Session,
+    *,
+    user_id: int,
+    subject: str,
+    session_id: Optional[int],
+    quiz_title: str,
+    scope_label: str,
+    score: float,
+    correct: int,
+    total: int,
+    passed: bool,
+    weak_points: list[Dict[str, Any]],
+) -> None:
+    if not session_id:
+        return
+    try:
+        session = (
+            db.query(ChatSessionDB)
+            .filter(
+                ChatSessionDB.id == session_id,
+                ChatSessionDB.user_id == user_id,
+                ChatSessionDB.subject == subject,
+            )
+            .first()
+        )
+        if not session:
+            return
+
+        status = "已通过" if passed else "需要巩固"
+        lines = [
+            f"## {quiz_title}",
+            "",
+            f"- 范围：{scope_label or subject}",
+            f"- 结果：{round(float(score or 0))} 分，答对 {correct}/{total}，{status}。",
+        ]
+        if weak_points:
+            lines.append("- 需要回看：")
+            for item in weak_points[:3]:
+                section = str(item.get("section") or "本题").strip()
+                question = str(item.get("question") or "").strip()
+                reason = str(item.get("reason") or "").strip()
+                detail = question or reason or "错因待复盘"
+                lines.append(f"  - {section}：{detail[:120]}")
+        else:
+            lines.append("- 下一步：可以进入下一小节，或生成一份拓展练习保持手感。")
+
+        db.add(ChatHistoryDB(session_id=session.id, role="assistant", content="\n".join(lines)[:5000]))
+        session.updated_at = datetime.utcnow()
+        db.add(session)
+        db.commit()
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        print(f"[QUIZ_HISTORY] save failed: {exc}", flush=True)
+
 
 # ====================== /seed 接口（支持 GET 和 POST） ======================
 @app.get("/seed")
@@ -2248,6 +2328,8 @@ def _get_or_create_studio_row(db: Session, user_id: int, subject: str) -> UserLe
         subject=subject,
         portrait_json=json.dumps(default_portrait(), ensure_ascii=False),
         learning_path_json="[]",
+        resource_events_json="[]",
+        resource_artifacts_json="[]",
     )
     db.add(row)
     db.commit()
@@ -2306,14 +2388,40 @@ def _heuristic_merge_mastery_into_portrait(
         )
         .all()
     )
-    if not rows:
+    studio_row = (
+        db.query(UserLearningStudioDB)
+        .filter(UserLearningStudioDB.user_id == user_id, UserLearningStudioDB.subject == subject)
+        .first()
+    )
+    resource_events = _load_resource_events(studio_row, limit=60)
+    if not rows and not resource_events:
         return
-    avg_mastery = sum(float(r.mastery or 0) for r in rows) / max(len(rows), 1)
+
+    event_stats = _resource_event_stats(resource_events)
+    event_counts: Dict[str, int] = event_stats.get("counts") or {}
+    resource_total = sum(int(event_counts.get(key, 0) or 0) for key in RESOURCE_TYPES.keys())
+    practice_signal_count = sum(
+        int(event_counts.get(key, 0) or 0)
+        for key in ("practice_result", "small_quiz_result", "chapter_quiz_result")
+    )
+    avg_mastery = sum(float(r.mastery or 0) for r in rows) / max(len(rows), 1) if rows else 0.5
     passed = sum(1 for r in rows if r.small_quiz_passed)
     quiz_pending = sum(1 for r in rows if r.phase == "quiz_pending")
     active = sum(1 for r in rows if int(r.learn_turns or 0) > 0 or float(r.mastery or 0) > 0)
     passed_ratio = passed / max(len(rows), 1)
     turn_avg = sum(int(r.learn_turns or 0) for r in rows) / max(active, 1)
+    weak_section_count = 0
+    weak_item_count = 0
+    for r in rows:
+        try:
+            weak_items = json.loads(r.weak_points_json or "[]")
+        except Exception:
+            weak_items = []
+        if isinstance(weak_items, list) and weak_items:
+            weak_section_count += 1
+            weak_item_count += len([x for x in weak_items if isinstance(x, dict)])
+    weak_rate = min(1.0, weak_section_count / max(len(rows), 1))
+    weak_load = min(1.0, weak_item_count / max(len(rows) * 3, 1))
 
     def blend_dimension(key: str, score: float, note: str, weight: float = 0.68) -> None:
         current = portrait["dimensions"].get(key) or {"score": 0.5, "note": ""}
@@ -2324,15 +2432,56 @@ def _heuristic_merge_mastery_into_portrait(
             "note": note[:120],
         }
 
-    blend_dimension("知识基础", avg_mastery, f"随小节掌握度同步，当前均值约 {round(avg_mastery * 100)}%。")
+    blend_dimension(
+        "知识基础",
+        max(0.0, avg_mastery - weak_load * 0.12),
+        f"随小节掌握度和薄弱点同步；已记录 {weak_item_count} 个待巩固点。",
+    )
     blend_dimension(
         "学习目标对齐度",
         max(avg_mastery, passed_ratio),
         f"已通过 {passed} 个小节测验，{quiz_pending} 个小节待测。",
         weight=0.58,
     )
+    if weak_item_count:
+        blend_dimension(
+            "易错点偏好",
+            min(1.0, 0.42 + weak_rate * 0.34 + weak_load * 0.18),
+            f"薄弱点集中在 {weak_section_count} 个小节，后续题目会优先覆盖。",
+            weight=0.62,
+        )
     pace_score = min(1.0, 0.42 + passed_ratio * 0.45 + min(turn_avg, SECTION_FORCE_QUIZ_TURNS) / SECTION_FORCE_QUIZ_TURNS * 0.13)
     blend_dimension("学习节奏", pace_score, f"平均带学 {turn_avg:.1f} 轮；通过测验后节奏评分会继续上升。", weight=0.52)
+
+    if resource_events:
+        focus_terms = event_stats.get("focus_terms") or []
+        focus_note = f"；最近聚焦：{'、'.join(focus_terms[:3])}" if focus_terms else ""
+        blend_dimension(
+            "认知风格",
+            min(1.0, 0.44 + min(resource_total, 8) * 0.045 + min(practice_signal_count, 5) * 0.055),
+            f"已使用 {resource_total} 份学习素材、{practice_signal_count} 次练习反馈{focus_note}。",
+            weight=0.42,
+        )
+        transfer_score = min(
+            1.0,
+            0.42
+            + min(int(event_counts.get("extended_reading", 0) or 0), 3) * 0.11
+            + min(int(event_counts.get("code_lab", 0) or 0), 3) * 0.08
+            + min(int(event_counts.get("video_script", 0) or 0), 2) * 0.06,
+        )
+        blend_dimension(
+            "兴趣与拓展倾向",
+            transfer_score,
+            f"拓展阅读 {event_counts.get('extended_reading', 0)} 次，代码实操 {event_counts.get('code_lab', 0)} 次，表达脚本 {event_counts.get('video_script', 0)} 次。",
+            weight=0.44,
+        )
+        if practice_signal_count:
+            blend_dimension(
+                "学习节奏",
+                min(1.0, pace_score + min(practice_signal_count, 5) * 0.035),
+                f"学习、练习和素材反馈已形成闭环；累计 {practice_signal_count} 次评测反馈。",
+                weight=0.36,
+            )
 
 
 def _studio_llm_portrait(
@@ -2379,7 +2528,406 @@ def _studio_llm_portrait(
         return p
 
 
+def _load_resource_events(row: Optional[UserLearningStudioDB], limit: int = 24) -> list[Dict[str, Any]]:
+    if not row or not row.resource_events_json:
+        return []
+    try:
+        data = json.loads(row.resource_events_json or "[]")
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [x for x in data if isinstance(x, dict)][: max(0, limit)]
+
+
+def _load_resource_artifacts(row: Optional[UserLearningStudioDB], limit: int = 80) -> list[Dict[str, Any]]:
+    if not row or not getattr(row, "resource_artifacts_json", None):
+        return []
+    try:
+        data = json.loads(row.resource_artifacts_json or "[]")
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [x for x in data if isinstance(x, dict)][: max(0, limit)]
+
+
+def _save_resource_artifact(
+    db: Session,
+    *,
+    user_id: int,
+    subject: str,
+    chapter_id: str,
+    section_id: str,
+    resource_type: str,
+    scope_label: str,
+    content: str,
+    source_count: int = 0,
+) -> None:
+    text_content = str(content or "").strip()
+    if not text_content:
+        return
+    row = _get_or_create_studio_row(db, user_id, subject)
+    artifacts = _load_resource_artifacts(row, limit=80)
+    now = datetime.utcnow().isoformat()
+    payload = {
+        "resource_type": resource_type,
+        "chapter_id": chapter_id,
+        "section_id": section_id,
+        "scope_label": scope_label,
+        "content": text_content[:28000],
+        "summary": text_content[:320],
+        "source_count": int(source_count or 0),
+        "updated_at": now,
+    }
+
+    filtered: list[Dict[str, Any]] = []
+    replaced = False
+    for item in artifacts:
+        same_slot = (
+            item.get("chapter_id") == chapter_id
+            and item.get("section_id") == section_id
+            and item.get("resource_type") == resource_type
+        )
+        if same_slot and not replaced:
+            filtered.append(payload)
+            replaced = True
+        elif not same_slot:
+            filtered.append(item)
+    if not replaced:
+        filtered.insert(0, payload)
+    row.resource_artifacts_json = json.dumps(filtered[:60], ensure_ascii=False)[:240000]
+    row.updated_at = datetime.utcnow()
+    db.add(row)
+    db.commit()
+
+
+def _resource_event_stats(events: list[Dict[str, Any]]) -> Dict[str, Any]:
+    counts: Dict[str, int] = defaultdict(int)
+    generated_types: set[str] = set()
+    source_count = 0
+    latest_result_score: Optional[float] = None
+    latest_practice_score: Optional[float] = None
+    focus_terms: list[str] = []
+
+    for event in events:
+        resource_type = str(event.get("resource_type") or "").strip()
+        if not resource_type:
+            continue
+        counts[resource_type] += 1
+        if resource_type in RESOURCE_TYPES:
+            generated_types.add(resource_type)
+        try:
+            source_count += int(event.get("source_count") or 0)
+        except Exception:
+            pass
+
+        summary = str(event.get("summary") or "")
+        match = re.search(r"score=([0-9]+(?:\.[0-9]+)?)", summary)
+        if match:
+            try:
+                score = float(match.group(1))
+                latest_result_score = score
+                if resource_type == "practice_result":
+                    latest_practice_score = score
+            except Exception:
+                pass
+
+        for key in ("focus_nodes", "focus_terms"):
+            values = event.get(key)
+            if isinstance(values, list):
+                for value in values:
+                    text_value = str(value or "").strip()
+                    if 2 <= len(text_value) <= 48 and text_value not in focus_terms:
+                        focus_terms.append(text_value)
+                        if len(focus_terms) >= 8:
+                            break
+            if len(focus_terms) >= 8:
+                break
+
+    return {
+        "counts": dict(counts),
+        "generated_types": generated_types,
+        "source_count": source_count,
+        "latest_result_score": latest_result_score,
+        "latest_practice_score": latest_practice_score,
+        "focus_terms": focus_terms[:8],
+    }
+
+
+def _is_technical_subject(subject: str) -> bool:
+    s = str(subject or "").lower()
+    return bool(
+        s in ("cs", "nlp", "dl", "os")
+        or "计算" in subject
+        or "代码" in subject
+        or "程序" in subject
+        or "机器学习" in subject
+        or "自然语言" in subject
+        or "操作系统" in subject
+    )
+
+
+def _choose_resource_recommendation(
+    *,
+    subject: str,
+    weak_points: list[Dict[str, Any]],
+    score: Optional[float],
+    phase: str = "",
+    mastery: float = 0.0,
+    events: list[Dict[str, Any]],
+) -> Dict[str, str]:
+    stats = _resource_event_stats(events)
+    generated = stats["generated_types"]
+    counts = stats["counts"]
+    latest_practice_score = stats.get("latest_practice_score")
+    failed_recent_practice = latest_practice_score is not None and latest_practice_score < QUIZ_PASSING_SCORE
+    failed_section_quiz = score is not None and score < QUIZ_PASSING_SCORE
+
+    def pack(resource_type: str, reason: str) -> Dict[str, str]:
+        return {"type": resource_type, "reason": reason}
+
+    if weak_points:
+        if "course_digest" not in generated or failed_recent_practice:
+            return pack("course_digest", "先把薄弱点背后的概念边界重新讲清。")
+        if not counts.get("practice_pack") or not counts.get("practice_result"):
+            return pack("practice_pack", "围绕已暴露的薄弱点做一次针对检测。")
+        if "extended_reading" not in generated:
+            return pack("extended_reading", "换一个来源解释同一个卡点。")
+        return pack("practice_pack", "继续用变式题确认薄弱点是否真正补上。")
+
+    if phase == "quiz_pending":
+        return pack("practice_pack", "当前已经适合进入检测。")
+    if failed_section_quiz:
+        if "course_digest" not in generated:
+            return pack("course_digest", "测验未达标，先回看精讲再练。")
+        return pack("practice_pack", "用针对练习复测未达标部分。")
+    if "course_digest" not in generated:
+        return pack("course_digest", "先生成一页精讲，建立本节主线。")
+    if _is_technical_subject(subject) and "code_lab" not in generated and mastery >= 0.35:
+        return pack("code_lab", "把概念落到可运行的小实验里。")
+    if "extended_reading" not in generated and mastery >= 0.42:
+        return pack("extended_reading", "补一个可信来源，扩大理解角度。")
+    if not counts.get("practice_result"):
+        return pack("practice_pack", "用练习确认是否可以前进。")
+    if "video_script" not in generated and mastery >= 0.55:
+        return pack("video_script", "把本节讲给别人听，检验表达是否完整。")
+    return pack("practice_pack", "继续用小练习保持手感。")
+
+
+def _extract_resource_focus_terms(markdown: str, fallback_label: str = "", limit: int = 8) -> list[str]:
+    text = str(markdown or "")
+    candidates: list[str] = []
+    if fallback_label:
+        candidates.append(fallback_label)
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("```") or line.lower() in {"mermaid", "mindmap"}:
+            continue
+        quoted = re.search(r'\["([^"]{2,48})"\]', line)
+        if quoted:
+            candidates.append(quoted.group(1))
+            continue
+        node = re.search(r"\(\(([^()]{2,48})\)\)", line)
+        if node:
+            candidates.append(node.group(1))
+            continue
+        cleaned = re.sub(r"^[\s#*\-+>0-9.]+", "", line)
+        if re.match(r"^[a-zA-Z][\w-]{0,24}\s*(?:[\[{(])", cleaned):
+            cleaned = re.sub(r"^[a-zA-Z0-9_-]+\s*", "", cleaned)
+        cleaned = re.sub(r"[\[\]{}()]+", "", cleaned).strip()
+        if 2 <= len(cleaned) <= 32 and not cleaned.lower().startswith(("flowchart", "graph ")):
+            candidates.append(cleaned)
+    out: list[str] = []
+    for item in candidates:
+        value = re.sub(r"\s+", " ", str(item or "")).strip()
+        if value and value not in out:
+            out.append(value)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _append_resource_event(db: Session, user_id: int, subject: str, event: Dict[str, Any]) -> None:
+    row = _get_or_create_studio_row(db, user_id, subject)
+    events = _load_resource_events(row, limit=60)
+    payload = dict(event or {})
+    payload["created_at"] = datetime.utcnow().isoformat()
+    row.resource_events_json = json.dumps([payload] + events, ensure_ascii=False)[:48000]
+    row.updated_at = datetime.utcnow()
+    try:
+        course = resolve_course(db, subject)
+        if course:
+            row.learning_path_json = json.dumps(
+                _studio_build_learning_path(db, user_id, subject, course),
+                ensure_ascii=False,
+            )[:48000]
+    except Exception as exc:
+        print(f"[STUDIO_PATH] snapshot sync failed: {exc}", flush=True)
+    db.add(row)
+    db.commit()
+
+
+def _load_weak_points(prog: Optional[SectionLearningProgressDB], limit: int = 6) -> list[Dict[str, Any]]:
+    if not prog or not prog.weak_points_json:
+        return []
+    try:
+        data = json.loads(prog.weak_points_json)
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [x for x in data if isinstance(x, dict)][: max(0, limit)]
+
+
+def _section_effectively_passed(prog: Optional[SectionLearningProgressDB]) -> bool:
+    return bool(prog and prog.small_quiz_passed and not _load_weak_points(prog, limit=1))
+
+
+def _merge_weak_points(
+    prog: SectionLearningProgressDB,
+    new_points: list[Dict[str, Any]],
+    *,
+    limit: int = 24,
+) -> list[Dict[str, Any]]:
+    now = datetime.utcnow().isoformat()
+    merged: list[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in new_points + _load_weak_points(prog, limit=limit):
+        if not isinstance(raw, dict):
+            continue
+        question = str(raw.get("question") or raw.get("evidence") or "").strip()
+        reason = str(raw.get("reason") or raw.get("suggestion") or "").strip()
+        section = str(raw.get("section") or raw.get("concept") or "").strip()
+        selected_answer = str(raw.get("selected_answer") or "").strip()
+        correct_answer = str(raw.get("correct_answer") or "").strip()
+        if not question and not reason and not section:
+            continue
+        key = f"{section}|{question[:120]}|{reason[:120]}"
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(
+            {
+                "index": raw.get("index"),
+                "section": section,
+                "type": str(raw.get("type") or "practice"),
+                "question": question,
+                "reason": reason,
+                "selected_answer": selected_answer,
+                "correct_answer": correct_answer,
+                "seen_at": raw.get("seen_at") or now,
+            }
+        )
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def _normalize_weak_points_payload(
+    raw_points: Any,
+    scope_label: str,
+    *,
+    source_type: str,
+    limit: int = 6,
+) -> list[Dict[str, Any]]:
+    if not isinstance(raw_points, list):
+        return []
+    normalized: list[Dict[str, Any]] = []
+    for index, raw in enumerate(raw_points[:limit]):
+        if not isinstance(raw, dict):
+            continue
+        section = sanitize_user_plaintext(
+            str(raw.get("section") or raw.get("concept") or scope_label or "当前小节"),
+            max_len=160,
+        )
+        question = sanitize_user_plaintext(
+            str(raw.get("question") or raw.get("evidence") or raw.get("checkpoint") or raw.get("issue") or ""),
+            max_len=520,
+        )
+        reason = sanitize_user_plaintext(
+            str(raw.get("reason") or raw.get("suggestion") or raw.get("next_action") or ""),
+            max_len=820,
+        )
+        if not question and not reason:
+            continue
+        normalized.append(
+            {
+                "index": raw.get("index") or index + 1,
+                "section": section,
+                "type": source_type,
+                "question": question or section,
+                "reason": reason or "这一轮表现说明这里还需要再确认一次。",
+            }
+        )
+    return normalized
+
+
+def _section_adaptive_context(prog: Optional[SectionLearningProgressDB]) -> str:
+    if not prog:
+        return "new_section: start from core concepts, then verify with a short task."
+    parts: list[str] = []
+    weak_points = _load_weak_points(prog, limit=4)
+    if weak_points:
+        focus = " / ".join(str(x.get("section") or x.get("question") or "weak point")[:80] for x in weak_points)
+        parts.append(f"known_weak_points: {focus}")
+        details: list[str] = []
+        for idx, item in enumerate(weak_points[:3], start=1):
+            title = str(item.get("section") or item.get("question") or "weak point").strip()
+            question = str(item.get("question") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            selected = str(item.get("selected_answer") or "").strip()
+            correct = str(item.get("correct_answer") or "").strip()
+            detail_parts = [f"{idx}. {title[:80]}"]
+            if question and question != title:
+                detail_parts.append(f"question={question[:140]}")
+            if selected:
+                detail_parts.append(f"learner_answer={selected[:120]}")
+            if correct:
+                detail_parts.append(f"correct_answer={correct[:120]}")
+            if reason:
+                detail_parts.append(f"reason={reason[:180]}")
+            details.append("; ".join(detail_parts))
+        if details:
+            parts.append("weak_point_details:\n" + "\n".join(details))
+    if prog.small_quiz_score is not None and not prog.small_quiz_passed:
+        parts.append("recent_quiz_failed: repair concept boundaries before moving on.")
+    if prog.phase == "quiz_pending" or prog.pending_quiz_json:
+        parts.append("quiz_pending: the next task should connect learning to assessment.")
+    if int(prog.learn_turns or 0) > 0:
+        parts.append("dialogue_seen: connect the next explanation to recent answers.")
+    if float(prog.mastery or 0) < 0.45:
+        parts.append("low_mastery: begin with foundation checks.")
+    return "\n".join(parts) or "steady_progress: continue with concept contrast, example, and recall."
+
+
+def _course_section_steps(course: CourseDB) -> list[Dict[str, Any]]:
+    steps: list[Dict[str, Any]] = []
+    for ch in sorted(course.chapters, key=lambda x: natural_sort_key(x.id)):
+        for sec in sections_natural_order(parse_subsections_json(ch.subsections)):
+            sid = str(sec.get("id") or "")
+            if not sid:
+                continue
+            steps.append(
+                {
+                    "key": f"{ch.id}|{sid}",
+                    "chapter_id": ch.id,
+                    "chapter_title": ch.title,
+                    "section_id": sid,
+                    "section_title": str(sec.get("title") or sid),
+                }
+            )
+    return steps
+
+
 def _studio_build_learning_path(db: Session, user_id: int, subject: str, course: CourseDB) -> Dict[str, Any]:
+    studio_row = _get_or_create_studio_row(db, user_id, subject)
+    resource_events = _load_resource_events(studio_row, limit=40)
+    events_by_key: Dict[str, list[Dict[str, Any]]] = defaultdict(list)
+    for event in resource_events:
+        key = f"{event.get('chapter_id') or ''}|{event.get('section_id') or ''}"
+        events_by_key[key].append(event)
+
     steps: list[Dict[str, Any]] = []
     for ch in sorted(course.chapters, key=lambda x: natural_sort_key(x.id)):
         secs = sections_natural_order(parse_subsections_json(ch.subsections))
@@ -2397,7 +2945,42 @@ def _studio_build_learning_path(db: Session, user_id: int, subject: str, course:
                 )
                 .first()
             )
-            done = bool(pr and pr.small_quiz_passed)
+            key = f"{ch.id}|{sid}"
+            weak_points = _load_weak_points(pr, limit=3) if pr else []
+            done = _section_effectively_passed(pr)
+            events = events_by_key.get(key, [])
+            event_stats = _resource_event_stats(events)
+            mastery = float(pr.mastery or 0) if pr else 0.0
+            score = float(pr.small_quiz_score) if pr and pr.small_quiz_score is not None else None
+            priority = 0.0 if done else max(0.0, 0.82 - mastery)
+            evidence: list[str] = []
+            if weak_points:
+                priority += 0.86
+                evidence.append("存在需要回看的薄弱点")
+            if pr and pr.phase == "quiz_pending":
+                priority += 0.2
+                evidence.append("小节测验待完成")
+            if score is not None and score < QUIZ_PASSING_SCORE:
+                priority += 0.28
+                evidence.append("最近测验未达标")
+            latest_practice_score = event_stats.get("latest_practice_score")
+            if latest_practice_score is not None and latest_practice_score < QUIZ_PASSING_SCORE:
+                priority += 0.22
+                evidence.append("资源练习反馈未达标")
+            if events:
+                priority -= min(0.16, len(events) * 0.04)
+                generated_types = sorted(event_stats.get("generated_types") or [])
+                evidence.append(f"已有 {len(events)} 条学习反馈" + (f"：{', '.join(generated_types[:3])}" if generated_types else ""))
+            if pr and int(pr.learn_turns or 0) > 0:
+                evidence.append(f"已对话 {int(pr.learn_turns or 0)} 轮")
+            recommendation = _choose_resource_recommendation(
+                subject=subject,
+                weak_points=weak_points,
+                score=score,
+                phase=pr.phase if pr else "",
+                mastery=mastery,
+                events=events,
+            )
             steps.append(
                 {
                     "chapter_id": ch.id,
@@ -2405,17 +2988,215 @@ def _studio_build_learning_path(db: Session, user_id: int, subject: str, course:
                     "section_id": sid,
                     "section_title": sec.get("title"),
                     "status": "done" if done else "pending",
+                    "priority": round(max(0.0, priority), 3),
+                    "weak_points": weak_points,
+                    "resource_count": len(events),
+                    "recommended_resource": recommendation["type"],
+                    "recommended_reason": recommendation["reason"],
+                    "resource_types": sorted(event_stats.get("generated_types") or []),
+                    "evidence": evidence[:4],
                 }
             )
     focus_idx = None
-    for i, s in enumerate(steps):
-        if s["status"] == "pending":
-            focus_idx = i
-            break
+    pending = [(i, s) for i, s in enumerate(steps) if s["status"] == "pending"]
+    if pending:
+        focus_idx = max(pending, key=lambda item: float(item[1].get("priority") or 0))[0]
     return {
         "steps": steps,
         "focus_index": focus_idx,
         "hint": "按顺序完成「待学」小节；每节前可在资源工坊生成预习材料，再进行 AI 带学。",
+    }
+
+
+def _learning_control_state(
+    db: Session,
+    user_id: int,
+    subject: str,
+    course: CourseDB,
+    current_chapter_id: Optional[str] = None,
+    current_section_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    steps = _course_section_steps(course)
+    rows = (
+        db.query(SectionLearningProgressDB)
+        .filter(SectionLearningProgressDB.user_id == user_id, SectionLearningProgressDB.subject == subject)
+        .all()
+    )
+    progress_by_key = {f"{r.chapter_id}|{r.section_id}": r for r in rows}
+    studio_row = (
+        db.query(UserLearningStudioDB)
+        .filter(UserLearningStudioDB.user_id == user_id, UserLearningStudioDB.subject == subject)
+        .first()
+    )
+    resource_events = _load_resource_events(studio_row, limit=40)
+    resource_by_key: Dict[str, list[Dict[str, Any]]] = defaultdict(list)
+    for event in resource_events:
+        key = f"{event.get('chapter_id') or ''}|{event.get('section_id') or ''}"
+        resource_by_key[key].append(event)
+
+    current_key = f"{current_chapter_id}|{current_section_id}" if current_chapter_id and current_section_id else ""
+    current_index = next((i for i, s in enumerate(steps) if s["key"] == current_key), None)
+    if current_index is None:
+        current_index = next(
+            (i for i, s in enumerate(steps) if not _section_effectively_passed(progress_by_key.get(s["key"]))),
+            0 if steps else None,
+        )
+    current = steps[current_index] if current_index is not None and steps else None
+    current_progress = progress_by_key.get(current["key"]) if current else None
+    current_weak_points = _load_weak_points(current_progress, limit=3) if current_progress else []
+    next_step = None
+    if current_index is not None:
+        for step in steps[current_index + 1 :]:
+            pr = progress_by_key.get(step["key"])
+            if not _section_effectively_passed(pr):
+                next_step = step
+                break
+
+    if not current:
+        action, headline, cue = "idle", "先选择一门课", "我会把下一步拆成可以执行的小动作。"
+    elif current_progress and current_weak_points:
+        first_weak = current_weak_points[0]
+        weak_label = first_weak.get("section") or first_weak.get("question") or "刚才卡住的点"
+        action, headline, cue = "repair_weak", "先补一个薄弱点", f"优先回看：{str(weak_label)[:80]}，再用针对练习确认。"
+    elif current_progress and current_progress.small_quiz_passed:
+        action = "next_section" if next_step else "chapter_review"
+        headline = "这一节已经通过"
+        cue = f"下一步看：{next_step['section_title']}" if next_step else "可以进入本章回看，或换一章继续。"
+    elif current_progress and current_progress.phase == "quiz_pending" and current_progress.pending_quiz_json:
+        action, headline, cue = "take_quiz", "现在适合做小测", "先完成小节练习，结果会反向更新画像、弱点和后续资源。"
+    elif current_progress and (
+        current_progress.phase == "quiz_ready"
+        or float(current_progress.mastery or 0) >= SECTION_QUIZ_MASTERY_THRESHOLD
+        or int(current_progress.learn_turns or 0) >= SECTION_FORCE_QUIZ_TURNS
+    ):
+        action, headline, cue = "prepare_quiz", "可以做小测", "用小节测验确认掌握度；结果会决定继续前进还是回补弱点。"
+    elif current_progress and int(current_progress.learn_turns or 0) > 0:
+        action, headline, cue = "continue_dialogue", "继续把概念讲透", "我会根据刚才的回答判断是否进入检测。"
+    else:
+        action, headline, cue = "start_guided", "从这一节开始", "先让 AI 带学抓主线，再用练习确认是否真正理解。"
+
+    weak_focus: list[Dict[str, Any]] = []
+    for step in steps:
+        pr = progress_by_key.get(step["key"])
+        weak_points = _load_weak_points(pr, limit=3) if pr else []
+        if _section_effectively_passed(pr):
+            continue
+        mastery = float(pr.mastery or 0) if pr else 0.0
+        score = float(pr.small_quiz_score) if pr and pr.small_quiz_score is not None else None
+        resource_count = len(resource_by_key.get(step["key"], []))
+        priority = max(0.0, 0.72 - mastery)
+        reason = "还没有开始"
+        if weak_points:
+            priority += 0.86 + min(0.18, len(weak_points) * 0.06)
+            reason = "有薄弱点"
+        if pr and pr.phase == "quiz_pending":
+            priority += 0.24
+            reason = "等待小测"
+        if score is not None and score < QUIZ_PASSING_SCORE:
+            priority += 0.36
+            reason = "测验未达标"
+        if resource_count:
+            priority -= min(0.16, resource_count * 0.04)
+        recommendation = _choose_resource_recommendation(
+            subject=subject,
+            weak_points=weak_points,
+            score=score,
+            phase=pr.phase if pr else "",
+            mastery=mastery,
+            events=resource_by_key.get(step["key"], []),
+        )
+        weak_focus.append(
+            {
+                "key": step["key"],
+                "chapter_id": step["chapter_id"],
+                "section_id": step["section_id"],
+                "title": step["section_title"],
+                "reason": reason,
+                "weak_points": weak_points,
+                "resource_count": resource_count,
+                "priority": round(priority, 3),
+                "recommended_resource": recommendation["type"],
+                "recommended_reason": recommendation["reason"],
+            }
+        )
+    weak_focus = sorted(weak_focus, key=lambda x: x["priority"], reverse=True)[:4]
+
+    current_events = resource_by_key.get(current["key"], []) if current else []
+    current_score = float(current_progress.small_quiz_score) if current_progress and current_progress.small_quiz_score is not None else None
+    current_recommendation = _choose_resource_recommendation(
+        subject=subject,
+        weak_points=current_weak_points,
+        score=current_score,
+        phase=current_progress.phase if current_progress else "",
+        mastery=float(current_progress.mastery or 0) if current_progress else 0.0,
+        events=current_events,
+    )
+    label_map = {
+        "course_digest": "回看精讲" if action == "repair_weak" else "先看精讲",
+        "practice_pack": "针对练习",
+        "extended_reading": "换源解释" if action == "repair_weak" else "补充阅读",
+        "code_lab": "代码实操",
+        "video_script": "讲给别人听",
+    }
+    fallback_reasons = {
+        "course_digest": "把概念边界重新压清楚",
+        "practice_pack": "用练习确认是否真的理解",
+        "extended_reading": "换一个可信来源补理解",
+        "code_lab": "把概念变成可运行例子",
+        "video_script": "用表达反推理解是否完整",
+    }
+    ordered_types = [
+        current_recommendation["type"],
+        "course_digest",
+        "practice_pack",
+        "extended_reading",
+        "code_lab",
+        "video_script",
+    ]
+    if not _is_technical_subject(subject):
+        ordered_types = [x for x in ordered_types if x != "code_lab"]
+    resource_actions = []
+    seen_action_types: set[str] = set()
+    for resource_type in ordered_types:
+        if not resource_type or resource_type in seen_action_types or resource_type not in RESOURCE_TYPES:
+            continue
+        seen_action_types.add(resource_type)
+        resource_actions.append(
+            {
+                "type": resource_type,
+                "label": label_map.get(resource_type, RESOURCE_TYPES[resource_type]["title"]),
+                "reason": current_recommendation["reason"] if resource_type == current_recommendation["type"] else fallback_reasons.get(resource_type, "补一个匹配当前状态的资源"),
+            }
+        )
+        if len(resource_actions) >= 4:
+            break
+
+    primary_resource = resource_actions[0] if resource_actions else None
+    current_learning_goal = {
+        "action": action,
+        "headline": headline,
+        "cue": cue,
+        "chapter_id": current.get("chapter_id") if current else None,
+        "section_id": current.get("section_id") if current else None,
+        "title": current.get("section_title") if current else None,
+        "next_key": next_step.get("key") if next_step else None,
+        "weak_target": weak_focus[0] if weak_focus else None,
+        "recommended_resource": primary_resource.get("type") if primary_resource else None,
+        "recommended_reason": primary_resource.get("reason") if primary_resource else None,
+    }
+
+    return {
+        "current": current,
+        "next": next_step,
+        "action": action,
+        "headline": headline,
+        "cue": cue,
+        "current_learning_goal": current_learning_goal,
+        "weak_focus": weak_focus,
+        "resource_actions": resource_actions[:4],
+        "resource_evidence": resource_by_key.get(current["key"], [])[:6] if current else [],
+        "adaptive_context": _section_adaptive_context(current_progress),
+        "updated_at": datetime.utcnow().isoformat(),
     }
 
 
@@ -2501,42 +3282,242 @@ def learning_studio_path_rebuild(body: StudioPortraitRefreshBody, db: Session = 
     return {"path": path}
 
 
+def _safe_search_json(url: str, headers: Optional[Dict[str, str]] = None) -> Any:
+    req = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        raw = resp.read(800000)
+    return json.loads(raw.decode("utf-8", errors="ignore"))
+
+
+def _resource_search_sources(query: str, limit: int = 4) -> List[Dict[str, str]]:
+    q = sanitize_user_plaintext(query, max_len=180).strip()
+    if not q:
+        return []
+    results: list[Dict[str, str]] = []
+    seen: set[str] = set()
+
+    def push(title: str, url: str, snippet: str = "") -> None:
+        if not url or url in seen or not url.startswith(("http://", "https://")):
+            return
+        seen.add(url)
+        results.append({"title": title or url, "url": url, "snippet": snippet or ""})
+
+    brave_key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+    if brave_key:
+        try:
+            url = "https://api.search.brave.com/res/v1/web/search?" + urlencode({"q": q, "count": limit})
+            data = _safe_search_json(
+                url,
+                headers={
+                    "Accept": "application/json",
+                    "X-Subscription-Token": brave_key,
+                    "User-Agent": "mentor-learning-resource/1.0",
+                },
+            )
+            for item in (((data or {}).get("web") or {}).get("results") or []):
+                push(item.get("title") or "", item.get("url") or "", item.get("description") or "")
+                if len(results) >= limit:
+                    return results
+        except Exception as exc:
+            print(f"[RESOURCE_SEARCH] Brave search failed: {exc}", flush=True)
+
+    try:
+        url = "https://zh.wikipedia.org/w/api.php?" + urlencode(
+            {"action": "opensearch", "search": q, "limit": min(max(limit, 1), 5), "namespace": 0, "format": "json"}
+        )
+        data = _safe_search_json(url, headers={"User-Agent": "mentor-learning-resource/1.0"})
+        titles = data[1] if isinstance(data, list) and len(data) > 1 and isinstance(data[1], list) else []
+        descs = data[2] if isinstance(data, list) and len(data) > 2 and isinstance(data[2], list) else []
+        urls = data[3] if isinstance(data, list) and len(data) > 3 and isinstance(data[3], list) else []
+        for i, href in enumerate(urls):
+            push(titles[i] if i < len(titles) else href, href, descs[i] if i < len(descs) else "")
+            if len(results) >= limit:
+                break
+    except Exception as exc:
+        print(f"[RESOURCE_SEARCH] Wikipedia fallback failed: {exc}", flush=True)
+    return results[:limit]
+
+
+def _resource_quality_contract(resource_type: str) -> str:
+    common = (
+        "\n\n【输出质量要求】\n"
+        "- 只输出最终内容，不写寒暄。\n"
+        "- 首次出现术语时，用一句人话解释。\n"
+        "- 不要把单个字母、变量、公式符号拆成独立一行。\n"
+        "- 如果 Learning control 里有 known_weak_points，必须优先围绕薄弱点设计内容。\n"
+    )
+    contracts = {
+        "course_digest": "【格式】# 本节先抓住什么\n## 一句话主线\n## 概念边界\n## 方法怎么用\n## 例题拆解\n## 容易卡住的地方\n## 现在该做什么",
+        "extended_reading": "【格式】# 拓展阅读\n## 信息来源\n## 可以继续看的方向\n## 来源怎么用。信息来源只允许使用【联网检索结果】里的 URL；没有来源必须明确说明。",
+        "code_lab": "【格式】# 代码实操\n## 任务目标\n## 最小环境\n## 输入输出\n## 实现思路\n## 完整代码\n## 运行方式\n## 常见错误。必须包含 fenced code block。",
+        "video_script": "【格式】# 微课脚本\n## 开场\n## 分镜脚本\n至少 5 个 `### 镜头 N：短标题`，每个镜头含画面/板书要点、口播稿、时长建议。\n## 收束复盘",
+        "mind_map": "【格式】优先输出一个 fenced mermaid 代码块，只允许一个根节点。",
+    }
+    return common + "\n" + contracts.get(resource_type, "")
+
+
+def _resource_context_brief(
+    *,
+    subject: str,
+    scope_label: str,
+    hint: str,
+    adaptive_context: str,
+    source_count: int = 0,
+) -> str:
+    lines = [f"course={subject}", f"scope={scope_label}", f"source_count={source_count}"]
+    if adaptive_context.strip():
+        lines.append("adaptive_context:")
+        lines.append(adaptive_context.strip())
+    if hint.strip():
+        lines.append("user_extra_hint:")
+        lines.append(hint.strip()[:1200])
+    return "\n".join(lines)
+
+
+def _weak_points_from_resource_hint(hint: str, scope_label: str, limit: int = 3) -> list[Dict[str, Any]]:
+    points: list[Dict[str, Any]] = []
+    for raw_line in str(hint or "").splitlines():
+        line = raw_line.strip()
+        if not line.lower().startswith(("wrong_answer_focus:", "weak_focus:")):
+            continue
+        body = line.split(":", 1)[1].strip()
+        for part in re.split(r"\s*/\s*", body):
+            item = part.strip(" -;；")
+            if not item:
+                continue
+            section, question = scope_label, item
+            if ":" in item:
+                maybe_section, maybe_question = item.split(":", 1)
+                if maybe_section.strip():
+                    section = maybe_section.strip()
+                if maybe_question.strip():
+                    question = maybe_question.strip()
+            points.append(
+                {
+                    "index": len(points) + 1,
+                    "section": sanitize_user_plaintext(section, max_len=160),
+                    "type": "resource_hint",
+                    "question": sanitize_user_plaintext(question, max_len=520),
+                    "reason": "当前规划或答题回看把这里标记为优先薄弱点。",
+                }
+            )
+            if len(points) >= limit:
+                return points
+    return points
+
+
 @app.post("/learning/studio/resources/stream")
 def learning_studio_resource_stream(body: StudioResourceStreamBody, db: Session = Depends(get_db)):
     u = db.query(UserDB).filter(UserDB.username == body.username).first()
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
+    uid = u.id
     if body.resource_type not in RESOURCE_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"未知资源类型，可选：{', '.join(RESOURCE_TYPES.keys())}",
-        )
+        raise HTTPException(status_code=400, detail=f"未知资源类型，可选：{', '.join(RESOURCE_TYPES.keys())}")
     assert_user_content_safe(body.extra_hint)
     hint = sanitize_user_plaintext(body.extra_hint, max_len=2000)
     course = resolve_course(db, body.subject)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     ch_row = _chapter_row(db, course.id, body.chapter_id)
+    if not ch_row:
+        raise HTTPException(status_code=404, detail="章节不存在")
+    sec = find_section(ch_row.subsections, body.section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="小节不存在")
     scope_label, ref = _build_learning_reference(ch_row, body.section_id)
     spec = RESOURCE_TYPES[body.resource_type]
+    prog = (
+        db.query(SectionLearningProgressDB)
+        .filter(
+            SectionLearningProgressDB.user_id == u.id,
+            SectionLearningProgressDB.subject == body.subject,
+            SectionLearningProgressDB.chapter_id == body.chapter_id,
+            SectionLearningProgressDB.section_id == body.section_id,
+        )
+        .first()
+    )
+    adaptive_context = _section_adaptive_context(prog)
+    hinted_weak_points = _weak_points_from_resource_hint(hint, scope_label)
+
+    if body.resource_type == "practice_pack":
+        weak_points = _load_weak_points(prog, limit=6) if prog else []
+        if not weak_points:
+            weak_points = hinted_weak_points
+        focus_hint = "\n\n".join(part for part in (prog.section_summary if prog else "", hint, adaptive_context) if part)
+        paper = build_instant_paper(body.subject, scope_label, ref or "", focus_hint, weak_points=weak_points)
+        _append_resource_event(
+            db,
+            uid,
+            body.subject,
+            {
+                "resource_type": body.resource_type,
+                "chapter_id": body.chapter_id,
+                "section_id": body.section_id,
+                "scope_label": scope_label,
+                "focus": focus_hint,
+                "focus_terms": [
+                    str(x.get("section") or x.get("question") or "").strip()
+                    for x in weak_points[:8]
+                    if isinstance(x, dict) and str(x.get("section") or x.get("question") or "").strip()
+                ],
+                "summary": f"practice_pack questions={len(paper) if isinstance(paper, list) else 0} weak_points={len(weak_points)}",
+            },
+        )
+        _save_resource_artifact(
+            db,
+            user_id=uid,
+            subject=body.subject,
+            chapter_id=body.chapter_id,
+            section_id=body.section_id,
+            resource_type=body.resource_type,
+            scope_label=scope_label,
+            content=json.dumps(paper, ensure_ascii=False),
+            source_count=0,
+        )
+        headers = safety_headers(spec["agent_chain"])
+        headers["X-Resource-Type"] = body.resource_type
+        return StreamingResponse(iter([json.dumps(paper, ensure_ascii=False)]), media_type="application/json", headers=stream_response_headers(headers))
+
+    search_block = ""
+    source_count = 0
+    if body.resource_type == "extended_reading":
+        search_sources = _resource_search_sources(f"{course.name} {scope_label}")
+        source_count = len(search_sources)
+        if search_sources:
+            search_block = "\n\n【联网检索结果】\n" + "\n".join(
+                f"- [{item['title']}]({item['url']}) —— {item.get('snippet') or '与当前小节相关的可核验来源'}"
+                for item in search_sources
+            )
+        else:
+            search_block = "\n\n【联网检索结果】\n（空）本次未取得可核验联网来源；不得编造 URL、DOI 或来源。"
+
+    resource_context = _resource_context_brief(
+        subject=body.subject,
+        scope_label=scope_label,
+        hint=hint,
+        adaptive_context=adaptive_context,
+        source_count=source_count,
+    )
     sys_m = (
         spec["instruction"]
+        + _resource_quality_contract(body.resource_type)
         + f"\n\n【当前范围】{scope_label}\n【资料】\n"
         + (ref or "")[:11000]
+        + f"\n\n[Learning control]\n{adaptive_context}\n"
+        + f"\n\n[Resource context]\n{resource_context}\n"
+        + search_block
         + ANTI_HALLUCINATION_SYSTEM_SUFFIX
     )
     user_lines = [
         f"课程：{body.subject}；大章/小节：{scope_label}。",
-        "请严格只输出本任务要求的格式（Markdown / Mermaid / JSON 代码块等），勿输出与任务无关的寒暄。",
-        "整体表达要少术语、重点清楚、有画面感；必须出现术语时，立刻用一句人话解释。",
+        "请严格只输出本任务要求的格式，不输出与任务无关的寒暄。",
+        "表达要少术语、重点清楚、有画面感；必须出现术语时，立刻用一句人话解释。",
         "排版要规整：标题短、段落短、列表不超过 5 条；不要把单个字母或公式符号单独拆成一行。",
     ]
     if hint:
-        user_lines.append(f"学员/教师的额外要求：\n{hint}")
-    messages: List[Any] = [
-        {"role": "system", "content": sys_m},
-        {"role": "user", "content": "\n".join(user_lines)},
-    ]
+        user_lines.append(f"额外要求：\n{hint}")
+    messages: List[Any] = [{"role": "system", "content": sys_m}, {"role": "user", "content": "\n".join(user_lines)}]
     try:
         response = _get_llm_client().chat.completions.create(
             model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
@@ -2556,14 +3537,177 @@ def learning_studio_resource_stream(body: StudioResourceStreamBody, db: Session 
                     if emit:
                         yield emit
                     clean_answer = new_clean
+            final_text = clean_answer or collapse_repetition(raw_answer)
+            if final_text.strip():
+                try:
+                    with SessionLocal() as event_db:
+                        _append_resource_event(
+                            event_db,
+                            uid,
+                            body.subject,
+                            {
+                                "resource_type": body.resource_type,
+                                "chapter_id": body.chapter_id,
+                                "section_id": body.section_id,
+                                "scope_label": scope_label,
+                                "focus": resource_context,
+                                "focus_terms": _extract_resource_focus_terms(final_text, scope_label),
+                                "summary": final_text.strip()[:900],
+                                "source_count": source_count,
+                            },
+                        )
+                        _save_resource_artifact(
+                            event_db,
+                            user_id=uid,
+                            subject=body.subject,
+                            chapter_id=body.chapter_id,
+                            section_id=body.section_id,
+                            resource_type=body.resource_type,
+                            scope_label=scope_label,
+                            content=final_text,
+                            source_count=source_count,
+                        )
+                except Exception as event_exc:
+                    print(f"[RESOURCE_EVENT] save failed: {event_exc}", flush=True)
 
         hdr = safety_headers(spec["agent_chain"])
         hdr["X-Resource-Type"] = body.resource_type
-        return StreamingResponse(
-            generate_chunks(), media_type="text/plain", headers=stream_response_headers(hdr)
-        )
+        return StreamingResponse(generate_chunks(), media_type="text/plain", headers=stream_response_headers(hdr))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"资源生成失败: {exc}") from exc
+
+
+@app.get("/learning/studio/resources")
+def learning_studio_resources_get(
+    username: str = Query(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, pattern=USERNAME_PATTERN),
+    subject: str = Query(..., min_length=1, max_length=64),
+    chapter_id: str = Query(..., min_length=1, max_length=64),
+    section_id: str = Query(..., min_length=1, max_length=64),
+    db: Session = Depends(get_db),
+):
+    u = db.query(UserDB).filter(UserDB.username == username).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    course = resolve_course(db, subject)
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    ch_row = _chapter_row(db, course.id, chapter_id)
+    if not ch_row:
+        raise HTTPException(status_code=404, detail="章节不存在")
+    sec = find_section(ch_row.subsections, section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="小节不存在")
+    row = (
+        db.query(UserLearningStudioDB)
+        .filter(UserLearningStudioDB.user_id == u.id, UserLearningStudioDB.subject == subject)
+        .first()
+    )
+    artifacts = _load_resource_artifacts(row, limit=80)
+    by_type: Dict[str, Dict[str, Any]] = {}
+    for item in artifacts:
+        if item.get("chapter_id") != chapter_id or item.get("section_id") != section_id:
+            continue
+        resource_type = str(item.get("resource_type") or "").strip()
+        if resource_type not in RESOURCE_TYPES or resource_type in by_type:
+            continue
+        by_type[resource_type] = {
+            "resource_type": resource_type,
+            "title": RESOURCE_TYPES[resource_type].get("title") or resource_type,
+            "scope_label": item.get("scope_label") or scope_display(ch_row.title, sec.get("title")),
+            "content": item.get("content") or "",
+            "summary": item.get("summary") or "",
+            "source_count": item.get("source_count") or 0,
+            "updated_at": item.get("updated_at") or "",
+        }
+    return {
+        "subject": subject,
+        "chapter_id": chapter_id,
+        "section_id": section_id,
+        "scope_label": scope_display(ch_row.title, sec.get("title")),
+        "resources": by_type,
+    }
+
+
+@app.post("/learning/studio/practice-result")
+def learning_studio_practice_result(body: StudioPracticeResultBody, db: Session = Depends(get_db)):
+    u = db.query(UserDB).filter(UserDB.username == body.username).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    course = resolve_course(db, body.subject)
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    ch_row = _chapter_row(db, course.id, body.chapter_id)
+    if not ch_row:
+        raise HTTPException(status_code=404, detail="章节不存在")
+    sec = find_section(ch_row.subsections, body.section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="小节不存在")
+    scope_label = scope_display(ch_row.title, sec.get("title"))
+    prog = _get_or_create_section_progress(db, u.id, body.subject, body.chapter_id, body.section_id)
+
+    weak_points: list[Dict[str, Any]] = []
+    for i, raw in enumerate(body.weak_points[:8]):
+        if not isinstance(raw, dict):
+            continue
+        question = sanitize_user_plaintext(str(raw.get("question") or ""), max_len=500)
+        reason = sanitize_user_plaintext(str(raw.get("reason") or ""), max_len=800)
+        if not question and not reason:
+            continue
+        selected_answer = sanitize_user_plaintext(str(raw.get("selected_answer") or ""), max_len=500)
+        correct_answer = sanitize_user_plaintext(str(raw.get("correct_answer") or ""), max_len=500)
+        weak_points.append(
+            {
+                "index": raw.get("index") or i + 1,
+                "section": sanitize_user_plaintext(str(raw.get("section") or scope_label), max_len=160),
+                "type": sanitize_user_plaintext(str(raw.get("type") or "practice"), max_len=40),
+                "question": question,
+                "reason": reason,
+                "selected_answer": selected_answer,
+                "correct_answer": correct_answer,
+            }
+        )
+
+    score_ratio = max(0.0, min(1.0, float(body.score or 0) / 100.0))
+    if weak_points:
+        prog.weak_points_json = json.dumps(_merge_weak_points(prog, weak_points), ensure_ascii=False)[:12000]
+        prog.pending_quiz_json = None
+        if prog.phase == "quiz_pending":
+            prog.phase = "questioning"
+        existing_summary = (prog.section_summary or "").strip()
+        practice_note = "\n".join(
+            f"- Q{x['index']} {x['section']}: {x['question']} -> {x['reason']}"
+            + (f" | 你的答案: {x['selected_answer']}" if x.get("selected_answer") else "")
+            + (f" | 正确答案: {x['correct_answer']}" if x.get("correct_answer") else "")
+            for x in weak_points
+        )
+        prog.section_summary = (existing_summary + "\n\n[resource_practice]\n" + practice_note).strip()[-8000:]
+        prog.mastery = max(float(prog.mastery or 0), min(0.74, score_ratio))
+    else:
+        if float(body.score or 0) >= QUIZ_PASSING_SCORE:
+            if float(body.score or 0) >= 85:
+                prog.weak_points_json = None
+            if not prog.small_quiz_passed:
+                prog.phase = "quiz_ready"
+        prog.mastery = max(float(prog.mastery or 0), min(0.82, score_ratio))
+    prog.updated_at = datetime.utcnow()
+    _append_resource_event(
+        db,
+        u.id,
+        body.subject,
+        {
+            "resource_type": "practice_result",
+            "chapter_id": body.chapter_id,
+            "section_id": body.section_id,
+            "scope_label": scope_label,
+            "focus": "\n".join(x.get("question") or x.get("reason") or "" for x in weak_points[:5]),
+            "summary": f"practice_result score={round(float(body.score or 0), 1)} weak_points={len(weak_points)}",
+        },
+    )
+    db.commit()
+    return {
+        "weak_points": weak_points,
+        "control": _learning_control_state(db, u.id, body.subject, course, body.chapter_id, body.section_id),
+    }
 
 
 @app.get("/courses")
@@ -2697,6 +3841,21 @@ def learning_start_section(body: LearningStartBody, db: Session = Depends(get_db
         prog.section_summary = None
         prog.small_quiz_score = None
         prog.small_quiz_passed = False
+        cprog = (
+            db.query(ChapterLearningProgressDB)
+            .filter(
+                ChapterLearningProgressDB.user_id == u.id,
+                ChapterLearningProgressDB.subject == body.subject,
+                ChapterLearningProgressDB.chapter_id == body.chapter_id,
+            )
+            .first()
+        )
+        if cprog:
+            cprog.chapter_quiz_score = None
+            cprog.chapter_quiz_passed = False
+            cprog.pending_quiz_json = None
+            cprog.updated_at = datetime.utcnow()
+            db.add(cprog)
     prog.phase = "questioning"
     prog.updated_at = datetime.utcnow()
 
@@ -2713,6 +3872,10 @@ def learning_start_section(body: LearningStartBody, db: Session = Depends(get_db
     db.commit()
     db.refresh(sess)
     session_id = sess.id
+    uid = u.id
+    subject = body.subject
+    chapter_id = body.chapter_id
+    section_id = body.section_id
 
     sys_prompt = _learn_opening_system(body.subject, scope_label, ref)
     opening_note = body.opening_note.strip()
@@ -2762,12 +3925,34 @@ def learning_start_section(body: LearningStartBody, db: Session = Depends(get_db
         assistant_plain = _strip_learn_meta_trailer(clean_answer).strip()
         if not assistant_plain:
             assistant_plain = "（本节讲解暂时为空，请稍后重试。）"
+        meta_out: Dict[str, Any] = {
+            "mastery_total": 0.0,
+            "learn_turns": 0,
+            "quiz_pending": False,
+            "small_quiz": None,
+            "control": None,
+            "weak_points": [],
+        }
         with SessionLocal() as save_db:
             save_db.add(ChatHistoryDB(session_id=session_id, role="assistant", content=assistant_plain))
             s_row = save_db.query(ChatSessionDB).filter(ChatSessionDB.id == session_id).first()
             if s_row:
                 s_row.updated_at = datetime.utcnow()
+            prog2 = _get_or_create_section_progress(save_db, uid, subject, chapter_id, section_id)
+            prog2.phase = "questioning"
+            prog2.updated_at = datetime.utcnow()
             save_db.commit()
+            local_course = resolve_course(save_db, subject)
+            if local_course:
+                meta_out = {
+                    "mastery_total": float(prog2.mastery or 0),
+                    "learn_turns": int(prog2.learn_turns or 0),
+                    "quiz_pending": False,
+                    "small_quiz": None,
+                    "control": _learning_control_state(save_db, uid, subject, local_course, chapter_id, section_id),
+                    "weak_points": _load_weak_points(prog2, limit=5),
+                }
+        yield LEARN_META_BEGIN + json.dumps(meta_out, ensure_ascii=False) + LEARN_META_END
 
     return StreamingResponse(
         generate_chunks(),
@@ -2790,6 +3975,9 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="会话不存在")
     if (getattr(sess, "session_kind", None) or "chat") != "learn":
         raise HTTPException(status_code=400, detail="不是 AI 带学会话")
+    expected_scope_key = f"{body.chapter_id}|{body.section_id}"
+    if (sess.chapter or "").strip() != expected_scope_key:
+        raise HTTPException(status_code=409, detail="当前带学会话不属于所选小节，请重新开始本小节带学")
 
     course = resolve_course(db, body.subject)
     if not course:
@@ -2881,6 +4069,8 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
             "learn_turns": 0,
             "quiz_pending": False,
             "small_quiz": None,
+            "control": None,
+            "weak_points": [],
         }
         assistant_stored = teaching_md
 
@@ -2905,6 +4095,7 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
                         "section_complete": False,
                         "section_summary": "",
                         "small_quiz": None,
+                        "weak_points": [],
                     }
 
                 mastery_new = float(data.get("mastery_total") or 0)
@@ -2912,10 +4103,28 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
                 want_complete = bool(data.get("section_complete"))
                 small_quiz = data.get("small_quiz")
                 summary = str(data.get("section_summary") or "").strip()
+                dialogue_weak_points = _normalize_weak_points_payload(
+                    data.get("weak_points"),
+                    scope_label,
+                    source_type="dialogue",
+                    limit=3,
+                )
+                weak_note = "\n".join(
+                    f"- {x['section']}: {x['question']} -> {x['reason']}"
+                    for x in dialogue_weak_points
+                )
 
                 prog.learn_turns = learn_turns_after
                 prog.mastery = max(float(prog.mastery or 0), mastery_new)
                 prog.updated_at = datetime.utcnow()
+                if dialogue_weak_points:
+                    prog.weak_points_json = json.dumps(
+                        _merge_weak_points(prog, dialogue_weak_points),
+                        ensure_ascii=False,
+                    )[:12000]
+                    prog.pending_quiz_json = None
+                    if prog.phase == "quiz_pending":
+                        prog.phase = "questioning"
 
                 if mastery_new >= SECTION_QUIZ_MASTERY_THRESHOLD or learn_turns_after >= SECTION_FORCE_QUIZ_TURNS:
                     want_complete = True
@@ -2935,13 +4144,17 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
                             scope_label,
                             ref,
                             summary,
+                            weak_points=_load_weak_points(prog, limit=6),
                         )
                     except Exception:
                         quiz_questions = None
 
                 if want_complete and quiz_questions:
                     prog.phase = "quiz_pending"
-                    prog.section_summary = summary[:8000] if summary else None
+                    summary_parts = [summary[:7000]] if summary else []
+                    if weak_note:
+                        summary_parts.append("[dialogue_weak_points]\n" + weak_note)
+                    prog.section_summary = "\n\n".join(summary_parts).strip()[-8000:] or None
                     prog.pending_quiz_json = json.dumps(quiz_questions, ensure_ascii=False)[:SMALL_QUIZ_JSON_MAX_CHARS]
                     quiz_ready = True
                     if prog.section_summary:
@@ -2949,11 +4162,17 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
                     assistant_msg += "\n\n本节对话已完成。请完成 **小节测验**（在测验窗口中作答）。"
                 elif want_complete:
                     prog.phase = "questioning"
+                    if weak_note:
+                        existing_summary = (prog.section_summary or "").strip()
+                        prog.section_summary = (existing_summary + "\n\n[dialogue_weak_points]\n" + weak_note).strip()[-8000:]
                     assistant_msg += (
                         "\n\n（测验未生成完整，我们再巩固一问。）\n请用一句话概括本节最核心的定义。"
                     )
                 else:
                     prog.phase = "questioning"
+                    if weak_note:
+                        existing_summary = (prog.section_summary or "").strip()
+                        prog.section_summary = (existing_summary + "\n\n[dialogue_weak_points]\n" + weak_note).strip()[-8000:]
 
                 work_db.add(
                     ChatHistoryDB(session_id=session_id, role="assistant", content=assistant_msg)
@@ -2965,8 +4184,10 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
 
                 if prog.pending_quiz_json:
                     try:
-                        quiz_payload = json.loads(prog.pending_quiz_json)
-                    except json.JSONDecodeError:
+                        quiz_payload = public_quiz_questions(
+                            _normalize_small_quiz_questions(json.loads(prog.pending_quiz_json))
+                        )
+                    except Exception:
                         quiz_payload = None
 
                 meta_out = {
@@ -2974,6 +4195,8 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
                     "learn_turns": int(prog.learn_turns or 0),
                     "quiz_pending": quiz_ready,
                     "small_quiz": quiz_payload,
+                    "control": _learning_control_state(work_db, u2.id, subject, course, chapter_id, section_id),
+                    "weak_points": _load_weak_points(prog, limit=5),
                 }
                 assistant_stored = assistant_msg
         except Exception:
@@ -2997,6 +4220,8 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
                     "learn_turns": int(prog.learn_turns or 0),
                     "quiz_pending": False,
                     "small_quiz": None,
+                    "control": _learning_control_state(work_db, uid, subject, course, chapter_id, section_id),
+                    "weak_points": _load_weak_points(prog, limit=5),
                 }
                 assistant_stored = fallback
 
@@ -3018,6 +4243,8 @@ def learning_answer_turn(body: LearningAnswerBody, db: Session = Depends(get_db)
 def learning_progress(
     username: str = Query(..., min_length=1),
     subject: str = Query(..., min_length=1),
+    chapter_id: Optional[str] = Query(None, min_length=1, max_length=64),
+    section_id: Optional[str] = Query(None, min_length=1, max_length=64),
     db: Session = Depends(get_db),
 ):
     u = db.query(UserDB).filter(UserDB.username == username).first()
@@ -3035,6 +4262,8 @@ def learning_progress(
     section_map: Dict[str, Any] = {}
     for r in rows:
         k = f"{r.chapter_id}|{r.section_id}"
+        weak_points = _load_weak_points(r, limit=5)
+        effectively_passed = bool(r.small_quiz_passed and not weak_points)
         section_map[k] = {
             "mastery": r.mastery,
             "learn_turns": r.learn_turns,
@@ -3044,7 +4273,10 @@ def learning_progress(
             or float(r.mastery or 0) >= SECTION_QUIZ_MASTERY_THRESHOLD
             or int(r.learn_turns or 0) >= SECTION_FORCE_QUIZ_TURNS,
             "small_quiz_passed": r.small_quiz_passed,
+            "effectively_passed": effectively_passed,
+            "needs_review": bool(weak_points),
             "small_quiz_score": r.small_quiz_score,
+            "weak_points": weak_points,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         }
 
@@ -3058,7 +4290,7 @@ def learning_progress(
             if not sid:
                 continue
             st = section_map.get(f"{ch.id}|{sid}")
-            if st and st.get("small_quiz_passed"):
+            if st and st.get("effectively_passed"):
                 passed += 1
         cq = (
             db.query(ChapterLearningProgressDB)
@@ -3081,6 +4313,7 @@ def learning_progress(
         "subject": subject,
         "sections": section_map,
         "chapters": chapters_out,
+        "control": _learning_control_state(db, u.id, subject, course, chapter_id, section_id),
         "section_completion_rule": {
             "mastery_threshold": SECTION_QUIZ_MASTERY_THRESHOLD,
             "force_quiz_turns": SECTION_FORCE_QUIZ_TURNS,
@@ -3104,11 +4337,17 @@ def learning_small_quiz_prepare(body: SmallQuizPrepareBody, db: Session = Depend
         raise HTTPException(status_code=404, detail="小节不存在")
 
     prog = _get_or_create_section_progress(db, u.id, body.subject, body.chapter_id, body.section_id)
-    if prog.small_quiz_passed:
+    if _section_effectively_passed(prog):
         return {"questions": [], "already_passed": True}
     if prog.pending_quiz_json and prog.phase == "quiz_pending":
         try:
-            return {"questions": _normalize_small_quiz_questions(json.loads(prog.pending_quiz_json))}
+            questions = _normalize_small_quiz_questions(json.loads(prog.pending_quiz_json))
+            if quiz_has_internal_scaffolding(questions):
+                raise ValueError("stale quiz contains internal scaffolding")
+            weak_points = _load_weak_points(prog, limit=6)
+            if weak_points and not any(q.get("weak_point_index") for q in questions):
+                raise ValueError("stale quiz does not include current weak points")
+            return {"questions": public_quiz_questions(questions), "cached": True, "already_passed": False}
         except Exception:
             prog.pending_quiz_json = None
 
@@ -3119,6 +4358,7 @@ def learning_small_quiz_prepare(body: SmallQuizPrepareBody, db: Session = Depend
             scope_label,
             ref,
             prog.section_summary or "",
+            weak_points=_load_weak_points(prog, limit=6),
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"小节测验生成失败: {exc}") from exc
@@ -3129,7 +4369,7 @@ def learning_small_quiz_prepare(body: SmallQuizPrepareBody, db: Session = Depend
         prog.section_summary = f"直接进入小节测验：{scope_label}"
     prog.updated_at = datetime.utcnow()
     db.commit()
-    return {"questions": questions, "already_passed": False}
+    return {"questions": public_quiz_questions(_normalize_small_quiz_questions(questions)), "already_passed": False, "cached": False}
 
 
 @app.post("/learning/quiz/small/submit")
@@ -3137,6 +4377,16 @@ def learning_small_quiz_submit(body: SmallQuizSubmitBody, db: Session = Depends(
     u = db.query(UserDB).filter(UserDB.username == body.username).first()
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
+    course = resolve_course(db, body.subject)
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    ch_row = _chapter_row(db, course.id, body.chapter_id)
+    if not ch_row:
+        raise HTTPException(status_code=404, detail="章节不存在")
+    sec = find_section(ch_row.subsections, body.section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="小节不存在")
+
     prog = _get_or_create_section_progress(db, u.id, body.subject, body.chapter_id, body.section_id)
     if not prog.pending_quiz_json or prog.phase != "quiz_pending":
         raise HTTPException(status_code=400, detail="当前没有待提交的小节测验")
@@ -3146,46 +4396,110 @@ def learning_small_quiz_submit(body: SmallQuizSubmitBody, db: Session = Depends(
         raise HTTPException(status_code=500, detail="测验数据损坏")
     if not isinstance(qs, list) or len(qs) < SMALL_QUIZ_QUESTION_COUNT:
         raise HTTPException(status_code=500, detail="测验题目不完整")
-    correct = 0
-    results: list[Dict[str, Any]] = []
+
     quiz_questions = _normalize_small_quiz_questions(qs)
+    correct = 0
+    earned_points = 0.0
+    total_points = 0.0
+    results: list[Dict[str, Any]] = []
     for i, qi in enumerate(quiz_questions):
-        ci = int(qi.get("correct_index", -1))
-        ai = body.answers[i] if i < len(body.answers) else -1
-        ok = 0 <= ai < 4 and 0 <= ci < 4 and ai == ci
+        answer = body.answers[i] if i < len(body.answers) else None
+        awarded_points, ok = score_quiz_answer(qi, answer)
+        points = float(qi.get("points") or 1)
+        earned_points += awarded_points
+        total_points += points
         if ok:
             correct += 1
         results.append(
             {
                 "index": i,
+                "id": qi.get("id") or f"q{i + 1:02d}",
+                "section": qi.get("section") or "综合练习",
+                "type": qi.get("type") or "single",
+                "target_concept": qi.get("target_concept") or "",
+                "points": points,
+                "awarded_points": awarded_points,
                 "question": str(qi.get("question") or ""),
-                "options": [str(x) for x in (qi.get("options") or [])[:4]],
-                "selected_index": ai,
-                "correct_index": ci,
+                "options": [str(x) for x in (qi.get("options") or [])],
+                "selected_answer": quiz_answer_summary(qi, answer),
+                "correct_answer": quiz_answer_summary(qi, None, correct=True),
                 "is_correct": ok,
                 "explanation": str(qi.get("explanation") or "请回到本小节资料，重新核对该知识点。"),
             }
         )
+
     total = len(quiz_questions)
-    score = (correct / max(total, 1)) * 100.0
+    incorrect = total - correct
+    score = (earned_points / max(total_points, 1.0)) * 100.0
     passed = score >= QUIZ_PASSING_SCORE
     prog.small_quiz_score = score
     prog.small_quiz_passed = passed
     prog.mastery = max(float(prog.mastery or 0), score / 100.0)
+    weak_items = [x for x in results if not x.get("is_correct")][:5]
+    weak_points = [
+        {
+            "index": int(x.get("index", 0)) + 1,
+            "section": x.get("target_concept") or x.get("section") or "综合练习",
+            "type": x.get("type") or "single",
+            "question": x.get("question") or "",
+            "reason": x.get("explanation") or "",
+        }
+        for x in weak_items
+    ]
+
     if passed:
         prog.pending_quiz_json = None
         prog.phase = "done"
+        prog.weak_points_json = None
     else:
-        prog.pending_quiz_json = None
-        prog.phase = "questioning"
+        prog.phase = "quiz_pending"
+        if weak_points:
+            prog.weak_points_json = json.dumps(_merge_weak_points(prog, weak_points), ensure_ascii=False)[:12000]
+            focus_note = "\n".join(
+                f"- Q{x['index']} {x['section']}: {x['question']} -> {x['reason']}"
+                for x in weak_points
+            )
+            existing_summary = (prog.section_summary or "").strip()
+            prog.section_summary = (existing_summary + "\n\n[weak_points]\n" + focus_note).strip()[-8000:]
     prog.updated_at = datetime.utcnow()
     db.commit()
-    weak_items = [x for x in results if not x.get("is_correct")][:5]
+    try:
+        scope_label = scope_display(ch_row.title, sec.get("title"))
+        _append_resource_event(
+            db,
+            u.id,
+            body.subject,
+            {
+                "resource_type": "small_quiz_result",
+                "chapter_id": body.chapter_id,
+                "section_id": body.section_id,
+                "scope_label": scope_label,
+                "focus": "\n".join(x.get("question") or x.get("reason") or "" for x in weak_points[:5]),
+                "summary": f"small_quiz score={round(float(score or 0), 1)} weak_points={len(weak_points)} passed={passed}",
+            },
+        )
+    except Exception as event_exc:
+        print(f"[SMALL_QUIZ_EVENT] save failed: {event_exc}", flush=True)
+
+    _append_quiz_history_snapshot(
+        db,
+        user_id=u.id,
+        subject=body.subject,
+        session_id=body.session_id,
+        quiz_title="小节测验结果",
+        scope_label=scope_display(ch_row.title, sec.get("title")),
+        score=score,
+        correct=correct,
+        total=total,
+        passed=passed,
+        weak_points=weak_points,
+    )
+
     remedial_prompt = (
         f"我刚完成「{body.chapter_id} / {body.section_id}」小节测验，得分 {round(score)} 分，未达标。"
         "请根据这些错题继续带我学习，先补核心概念，再给我练习：\n"
         + "\n".join(
-            f"{x['index'] + 1}. {x['question']}；正确答案：{chr(65 + int(x['correct_index']))}；解析：{x['explanation']}"
+            f"{x['index'] + 1}. {x['question']}；正确答案：{x['correct_answer']}；解析：{x['explanation']}"
             for x in weak_items
         )
     )
@@ -3193,11 +4507,85 @@ def learning_small_quiz_submit(body: SmallQuizSubmitBody, db: Session = Depends(
         "score": score,
         "passed": passed,
         "correct": correct,
+        "incorrect": incorrect,
         "total": total,
+        "earned_points": earned_points,
+        "total_points": total_points,
         "passing_score": QUIZ_PASSING_SCORE,
         "items": results,
+        "weak_points": weak_points,
+        "control": _learning_control_state(db, u.id, body.subject, course, body.chapter_id, body.section_id),
         "remedial_prompt": "" if passed else remedial_prompt[:4000],
     }
+
+
+def _chapter_quiz_context(
+    db: Session,
+    user_id: int,
+    subject: str,
+    ch_row: ChapterDB,
+) -> tuple[list[Dict[str, Any]], str, str, list[Dict[str, Any]]]:
+    sections = sections_natural_order(parse_subsections_json(ch_row.subsections))
+    material_parts: list[str] = []
+    summary_parts: list[str] = []
+    weak_points: list[Dict[str, Any]] = []
+    for sec in sections:
+        sid = str(sec.get("id") or "")
+        title = str(sec.get("title") or sid)
+        if not sid:
+            continue
+        scope_label, ref = _build_learning_reference(ch_row, sid)
+        if ref:
+            material_parts.append(f"【{title}】\n{ref[:3600]}")
+        pr = (
+            db.query(SectionLearningProgressDB)
+            .filter(
+                SectionLearningProgressDB.user_id == user_id,
+                SectionLearningProgressDB.subject == subject,
+                SectionLearningProgressDB.chapter_id == ch_row.id,
+                SectionLearningProgressDB.section_id == sid,
+            )
+            .first()
+        )
+        if pr and pr.section_summary:
+            summary_parts.append(f"【{title}】\n{pr.section_summary[:1800]}")
+        for raw in _load_weak_points(pr, limit=4) if pr else []:
+            point = dict(raw)
+            point["section_id"] = sid
+            point["section"] = str(point.get("section") or title)
+            weak_points.append(point)
+            if len(weak_points) >= 10:
+                break
+    if not summary_parts:
+        summary_parts.append(ch_row.desc or ch_row.title)
+    return (
+        sections,
+        "\n\n".join(material_parts)[:18000] or (ch_row.desc or ""),
+        "\n\n".join(summary_parts)[:10000],
+        weak_points[:10],
+    )
+
+
+def _section_id_for_chapter_quiz_item(sections: list[Dict[str, Any]], item: Dict[str, Any], fallback_index: int) -> str:
+    if not sections:
+        return ""
+    haystack = " ".join(
+        str(item.get(key) or "")
+        for key in ("section", "target_concept", "question", "explanation")
+    ).lower()
+    for sec in sections:
+        sid = str(sec.get("id") or "")
+        title = str(sec.get("title") or "")
+        if (sid and sid.lower() in haystack) or (title and title.lower() in haystack):
+            return sid
+    return str(sections[fallback_index % len(sections)].get("id") or "")
+
+
+def _section_title_by_id(sections: list[Dict[str, Any]], section_id: str) -> str:
+    for sec in sections:
+        if str(sec.get("id") or "") == str(section_id):
+            return str(sec.get("title") or section_id)
+    return section_id
 
 
 @app.post("/learning/chapter-quiz/prepare")
@@ -3214,54 +4602,29 @@ def learning_chapter_quiz_prepare(body: ChapterQuizPrepareBody, db: Session = De
     if not ch_row:
         raise HTTPException(status_code=404, detail="大章不存在")
 
-    summaries: list[str] = []
-    for sec in sections_natural_order(parse_subsections_json(ch_row.subsections)):
-        sid = str(sec.get("id") or "")
-        if not sid:
-            continue
-        pr = (
-            db.query(SectionLearningProgressDB)
-            .filter(
-                SectionLearningProgressDB.user_id == u.id,
-                SectionLearningProgressDB.subject == body.subject,
-                SectionLearningProgressDB.chapter_id == body.chapter_id,
-                SectionLearningProgressDB.section_id == sid,
-            )
-            .first()
-        )
-        if pr and pr.section_summary:
-            summaries.append(f"【{sec.get('title')}】{pr.section_summary}")
-    blob = "\n\n".join(summaries) if summaries else (ch_row.desc or "")
-    sys_q = (
-        f"你是「{body.subject}」导师。下面是大章「{ch_row.title}」下各小节学习小结与章描述。\n"
-        "请输出仅一个 JSON 数组（不要用 markdown 围栏），长度恰好为 5；每项为对象，含字段 "
-        "question、options（长度为 4 的字符串数组）、correct_index（0-3 的整数）。覆盖本章综合理解。\n"
-        f"【材料】\n{blob[:12000]}"
-    )
+    _sections, material, summary, weak_points = _chapter_quiz_context(db, u.id, body.subject, ch_row)
+    scope_label = f"{ch_row.title} 综合测验"
     try:
-        raw = _learn_chat_complete(
-            [{"role": "system", "content": sys_q}, {"role": "user", "content": "请生成大章测验题。"}],
-            temperature=0.3,
+        questions = build_instant_paper(
+            body.subject,
+            scope_label,
+            material,
+            summary,
+            weak_points=weak_points,
         )
-        try:
-            arr = _parse_json_array_from_llm(raw)
-        except Exception:
-            obj = _parse_json_object_from_llm(raw)
-            if isinstance(obj, dict) and isinstance(obj.get("questions"), list):
-                arr = obj["questions"]
-            else:
-                raise ValueError("expected array or object.questions") from None
-        if not isinstance(arr, list) or len(arr) < 5:
-            raise ValueError("bad array")
-        arr = arr[:5]
+        questions = _normalize_small_quiz_questions(questions)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"大章测验生成失败: {exc}") from exc
 
     cprog = _get_or_create_chapter_progress(db, u.id, body.subject, body.chapter_id)
-    cprog.pending_quiz_json = json.dumps(arr, ensure_ascii=False)[:24000]
+    cprog.pending_quiz_json = json.dumps(questions, ensure_ascii=False)[:36000]
     cprog.updated_at = datetime.utcnow()
     db.commit()
-    return {"questions": arr}
+    return {
+        "questions": public_quiz_questions(questions),
+        "already_passed": bool(cprog.chapter_quiz_passed),
+        "total": len(questions),
+    }
 
 
 @app.post("/learning/chapter-quiz/submit")
@@ -3269,33 +4632,132 @@ def learning_chapter_quiz_submit(body: ChapterQuizSubmitBody, db: Session = Depe
     u = db.query(UserDB).filter(UserDB.username == body.username).first()
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
+    course = resolve_course(db, body.subject)
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    ch_row = _chapter_row(db, course.id, body.chapter_id)
+    if not ch_row:
+        raise HTTPException(status_code=404, detail="大章不存在")
+    sections, _material, _summary, _existing_weak = _chapter_quiz_context(db, u.id, body.subject, ch_row)
     cprog = _get_or_create_chapter_progress(db, u.id, body.subject, body.chapter_id)
     if not cprog.pending_quiz_json:
         raise HTTPException(status_code=400, detail="请先调用 /learning/chapter-quiz/prepare 生成大章测验")
     try:
         qs = json.loads(cprog.pending_quiz_json)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="大章测验数据损坏")
-    if not isinstance(qs, list) or len(qs) < 5:
-        raise HTTPException(status_code=500, detail="大章测验题目不完整")
+        quiz_questions = normalize_mixed_quiz_questions(qs, limit=SMALL_QUIZ_QUESTION_COUNT)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"大章测验数据损坏，请重新生成: {exc}") from exc
+
     correct = 0
-    for i in range(5):
-        qi = qs[i]
-        if not isinstance(qi, dict):
-            continue
-        ci = int(qi.get("correct_index", -1))
-        ai = body.answers[i] if i < len(body.answers) else -1
-        if 0 <= ai < 4 and 0 <= ci < 4 and ai == ci:
+    earned_points = 0.0
+    total_points = 0.0
+    results: list[Dict[str, Any]] = []
+    for i, qi in enumerate(quiz_questions):
+        answer = body.answers[i] if i < len(body.answers) else None
+        awarded_points, ok = score_quiz_answer(qi, answer)
+        points = float(qi.get("points") or 1)
+        earned_points += awarded_points
+        total_points += points
+        if ok:
             correct += 1
-    score = (correct / 5.0) * 100.0
-    passed = score >= 60.0
+        results.append(
+            {
+                "index": i,
+                "id": qi.get("id") or f"q{i + 1:02d}",
+                "section": qi.get("section") or "综合练习",
+                "type": qi.get("type") or "single",
+                "target_concept": qi.get("target_concept") or "",
+                "points": points,
+                "awarded_points": awarded_points,
+                "question": str(qi.get("question") or ""),
+                "options": [str(x) for x in (qi.get("options") or [])],
+                "selected_answer": quiz_answer_summary(qi, answer),
+                "correct_answer": quiz_answer_summary(qi, None, correct=True),
+                "is_correct": ok,
+                "explanation": str(qi.get("explanation") or "请回到本章资料，重新核对该知识点。"),
+            }
+        )
+
+    total = len(quiz_questions)
+    score = (earned_points / max(total_points, 1.0)) * 100.0
+    passed = score >= QUIZ_PASSING_SCORE
+    incorrect = total - correct
     cprog.chapter_quiz_score = score
     cprog.chapter_quiz_passed = passed
+    cprog.chapter_summary = (
+        f"大章测验得分 {round(score, 1)}；正确 {correct}/{total}；"
+        f"{'已通过' if passed else '未达标，需要回到薄弱小节补强'}。"
+    )
     if passed:
         cprog.pending_quiz_json = None
     cprog.updated_at = datetime.utcnow()
+
+    weak_points: list[Dict[str, Any]] = []
+    focus_section_id = ""
+    for item in [x for x in results if not x.get("is_correct")][:8]:
+        section_id = _section_id_for_chapter_quiz_item(sections, item, int(item.get("index") or 0))
+        section_title = _section_title_by_id(sections, section_id)
+        if not focus_section_id:
+            focus_section_id = section_id
+        point = {
+            "index": int(item.get("index", 0)) + 1,
+            "section": item.get("target_concept") or section_title or item.get("section") or "本章综合",
+            "type": item.get("type") or "chapter_quiz",
+            "question": item.get("question") or "",
+            "reason": item.get("explanation") or "",
+        }
+        weak_points.append(point)
+        if section_id:
+            pr = _get_or_create_section_progress(db, u.id, body.subject, body.chapter_id, section_id)
+            pr.weak_points_json = json.dumps(_merge_weak_points(pr, [point]), ensure_ascii=False)[:12000]
+            pr.phase = "questioning"
+            pr.updated_at = datetime.utcnow()
+            existing_summary = (pr.section_summary or "").strip()
+            chapter_note = f"- Q{point['index']} {point['section']}: {point['question']} -> {point['reason']}"
+            pr.section_summary = (existing_summary + "\n\n[chapter_quiz_weak_point]\n" + chapter_note).strip()[-8000:]
+            db.add(pr)
+
+    _append_resource_event(
+        db,
+        u.id,
+        body.subject,
+        {
+            "resource_type": "chapter_quiz_result",
+            "chapter_id": body.chapter_id,
+            "section_id": focus_section_id,
+            "scope_label": ch_row.title,
+            "focus": "\n".join(x.get("question") or x.get("reason") or "" for x in weak_points[:5]),
+            "summary": f"chapter_quiz score={round(score, 1)} weak_points={len(weak_points)}",
+        },
+    )
+    db.add(cprog)
     db.commit()
-    return {"score": score, "passed": passed, "correct": correct, "total": 5}
+    _append_quiz_history_snapshot(
+        db,
+        user_id=u.id,
+        subject=body.subject,
+        session_id=body.session_id,
+        quiz_title="章节测验结果",
+        scope_label=ch_row.title,
+        score=score,
+        correct=correct,
+        total=total,
+        passed=passed,
+        weak_points=weak_points,
+    )
+    return {
+        "score": score,
+        "passed": passed,
+        "correct": correct,
+        "incorrect": incorrect,
+        "total": total,
+        "earned_points": earned_points,
+        "total_points": total_points,
+        "passing_score": QUIZ_PASSING_SCORE,
+        "items": results,
+        "weak_points": weak_points,
+        "control": _learning_control_state(db, u.id, body.subject, course, body.chapter_id, focus_section_id or None),
+    }
 
 
 ASK_USER_JSON_PREFIX = "__PA_USER_JSON__\n"
@@ -3386,8 +4848,17 @@ def _execute_ask_stream(
     course = resolve_course(db, subject)
     cid = (chapter_id or "").strip()
     sid = (section_id or "").strip()
+    session = None
+    if session_id:
+        session = db.query(ChatSessionDB).filter(ChatSessionDB.id == session_id).first()
+        if session and (
+            session.user_id != db_user.id or (getattr(session, "session_kind", None) or "chat") != "chat"
+        ):
+            session = None
 
     legacy = (chapter or "").strip()
+    if session and not cid and not sid and not legacy and session.chapter:
+        legacy = str(session.chapter or "").strip()
     if not cid and legacy and "|" in legacy:
         p1, p2 = legacy.split("|", 1)
         cid = p1.strip()
@@ -3436,10 +4907,6 @@ def _execute_ask_stream(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     title_src = q_plain if q_plain else ("附图提问" if images else "")
-    session = None
-    if session_id:
-        session = db.query(ChatSessionDB).filter(ChatSessionDB.id == session_id).first()
-
     if not session:
         session = ChatSessionDB(
             user_id=db_user.id,
@@ -3495,6 +4962,11 @@ def _execute_ask_stream(
         messages.append(history_content_to_chat_message(m.role, m.content))
 
     sid_for_stream = session.id
+    uid_for_stream = db_user.id
+    subject_for_stream = subject
+    cid_for_signal = cid
+    sid_for_signal = sid
+    scope_for_signal = scope_label
 
     def generate_chunks():
         try:
@@ -3533,6 +5005,63 @@ def _execute_ask_stream(
             if s:
                 s.updated_at = datetime.utcnow()
             save_db.commit()
+
+        if course and cid_for_signal and sid_for_signal and clean_answer.strip():
+            try:
+                with SessionLocal() as signal_db:
+                    sig_course = resolve_course(signal_db, subject_for_stream)
+                    sig_ch = _chapter_row(signal_db, sig_course.id, cid_for_signal) if sig_course else None
+                    sig_sec = find_section(sig_ch.subsections, sid_for_signal) if sig_ch else None
+                    if sig_course and sig_ch and sig_sec:
+                        signal = _ask_extract_learning_signal(clean_answer, q_plain, scope_for_signal)
+                        weak_payload = _normalize_weak_points_payload(
+                            signal.get("weak_points"),
+                            scope_for_signal,
+                            source_type="free_question",
+                        )
+                        prog = _get_or_create_section_progress(
+                            signal_db,
+                            uid_for_stream,
+                            subject_for_stream,
+                            cid_for_signal,
+                            sid_for_signal,
+                        )
+                        if weak_payload:
+                            prog.weak_points_json = json.dumps(
+                                _merge_weak_points(prog, weak_payload),
+                                ensure_ascii=False,
+                            )[:12000]
+                            if prog.phase == "idle":
+                                prog.phase = "questioning"
+                            prog.pending_quiz_json = None
+                            existing_summary = (prog.section_summary or "").strip()
+                            note = "\n".join(
+                                f"- {x.get('section')}: {x.get('question')} -> {x.get('reason')}"
+                                for x in weak_payload
+                            )
+                            prog.section_summary = (existing_summary + "\n\n[free_question_weak_points]\n" + note).strip()[-8000:]
+                        elif signal.get("summary"):
+                            existing_summary = (prog.section_summary or "").strip()
+                            prog.section_summary = (
+                                existing_summary + "\n\n[free_question_observation]\n" + str(signal.get("summary") or "")
+                            ).strip()[-8000:]
+                        prog.updated_at = datetime.utcnow()
+                        signal_db.commit()
+                        meta = {
+                            "source": "free_question",
+                            "weak_points": _load_weak_points(prog, limit=5),
+                            "control": _learning_control_state(
+                                signal_db,
+                                uid_for_stream,
+                                subject_for_stream,
+                                sig_course,
+                                cid_for_signal,
+                                sid_for_signal,
+                            ),
+                        }
+                        yield LEARN_META_BEGIN + json.dumps(meta, ensure_ascii=False) + LEARN_META_END
+            except Exception as exc:
+                print(f"[ASK_LEARNING_SIGNAL] skipped: {exc}", flush=True)
 
     return StreamingResponse(
         generate_chunks(),

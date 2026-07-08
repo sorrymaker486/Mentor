@@ -8,6 +8,8 @@ frontend/dist/
 frontend/output/
 dist/
 dist-ssr/
+.codex_tmp/
+.playwright-cli/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -22,6 +24,9 @@ backend/.neon_database_url
 
 # Local DB (dev)
 backend/users.db
+users.db
+
+.playwright-mcp/
 
 # Logs & OS / IDE
 _backups/

@@ -99,9 +99,9 @@ RESOURCE_TYPES: Dict[str, Dict[str, str]] = {
         "title": "混合题型练习包",
         "agent_chain": "guard,resource,evaluator",
         "instruction": (
-            "你是「练习命题」智能体。请输出 Markdown，内含一个 ```json 代码块```，"
-            "JSON 为数组，3~6 道题，每题含 type（single|multi）、question、options（数组）、"
-            "correct_index 或 correct_indices、explain 简短解析。难度贴合【资料】深度。"
+            "你是「完整试卷」命题智能体。试卷包含单选、多选、判断、填空与简答，"
+            "覆盖概念辨析、重点识别、关键词和应用表达；每题提供分值、答案与详细解析。"
+            "所有内容严格依据当前小节资料。"
         ),
     },
     "extended_reading": {

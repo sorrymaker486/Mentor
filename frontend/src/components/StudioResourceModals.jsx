@@ -1,14 +1,24 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import mermaid from 'mermaid';
 import ChatLikeMarkdown from './ChatLikeMarkdown';
 import MindmapOutlineView from './MindmapOutlineView';
 import { extractMermaidSource, expandLeadingTabs } from '../utils/mindmapOutline';
+import { extractPracticeQuestions } from '../utils/practicePackParse';
+import {
+  assessmentMarkdownDownload,
+  assessmentCorrectAnswer,
+  assessmentTypeLabel,
+  assessmentUserAnswer,
+  buildAssessmentResults,
+  isAssessmentAnswered,
+} from '../utils/assessmentUtils';
 import { decodeResourceMarkdownStream } from '../utils/resourceStreamDecode';
 import { parseStructuredVideoScript } from '../utils/videoScriptParse';
 
 /** 学习工作室通用浮层外壳（固定尺寸，不可拖拽改窗体大小） */
-export function ResizableStudioShell({ title, subtitle, onClose, children, footer }) {
-  return (
+export function ResizableStudioShell({ title, subtitle, onClose, children, footer, className = '' }) {
+  const dialog = (
     <div
       className="pointer-events-none fixed inset-0 z-[120] flex items-center justify-center bg-[#1a1f24]/40 p-3 backdrop-blur-[2px] sm:p-6"
       role="dialog"
@@ -21,10 +31,12 @@ export function ResizableStudioShell({ title, subtitle, onClose, children, foote
         aria-label="关闭"
         onClick={onClose}
       />
-      <div className="pointer-events-auto relative z-10 flex max-h-[min(88vh,900px)] w-[min(96vw,920px)] min-h-[280px] min-w-[min(96vw,320px)] flex-col overflow-hidden rounded-2xl border border-[#1a1f24]/[0.12] bg-[#faf9f7] shadow-[0_28px_80px_rgba(26,31,36,0.22)]">
+      <div
+        className={`pointer-events-auto relative z-10 flex max-h-[min(88vh,900px)] w-[min(96vw,920px)] min-h-[280px] min-w-[min(96vw,320px)] flex-col overflow-hidden rounded-2xl border border-[#1a1f24]/[0.12] bg-[#faf9f7] shadow-[0_28px_80px_rgba(26,31,36,0.22)] ${className}`}
+      >
         <div className="flex shrink-0 cursor-grab items-start justify-between gap-3 border-b border-[#1a1f24]/[0.08] bg-white/90 px-4 py-3 select-none active:cursor-grabbing sm:px-5">
           <div className="min-w-0">
-            <h2 id="res-studio-title" className="font-display text-lg font-medium text-[#1a1f24]">
+            <h2 id="res-studio-title" className="font-display text-lg font-medium text-left text-[#1a1f24]">
               {title}
             </h2>
             {subtitle && <p className="mt-1 truncate text-[11px] text-[#1a1f24]/45">{subtitle}</p>}
@@ -42,6 +54,7 @@ export function ResizableStudioShell({ title, subtitle, onClose, children, foote
       </div>
     </div>
   );
+  return typeof document === 'undefined' ? dialog : createPortal(dialog, document.body);
 }
 
 export function ChatDocResizableWindow({ open, title, subtitle, markdown, streaming, onClose, onCancel }) {
@@ -408,35 +421,6 @@ export function MermaidMindMapWindow({ open, rawMarkdown, streaming, onClose, on
   );
 }
 
-function normalizePracticeItem(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const question = raw.question ?? raw.Question ?? '';
-  const options = Array.isArray(raw.options)
-    ? raw.options
-    : Array.isArray(raw.Options)
-      ? raw.Options
-      : [];
-  const type = String(raw.type ?? raw.Type ?? 'single').toLowerCase() || 'single';
-  let correct_index = raw.correct_index ?? raw.correctIndex;
-  let correct_indices = raw.correct_indices ?? raw.correctIndices;
-  if (!Array.isArray(correct_indices)) correct_indices = [];
-  if (type !== 'multi' && correct_index == null && correct_indices.length === 1) {
-    correct_index = correct_indices[0];
-  }
-  if (type === 'multi' && correct_indices.length === 0 && correct_index != null) {
-    correct_indices = [correct_index];
-  }
-  return {
-    ...raw,
-    question,
-    options,
-    type,
-    correct_index,
-    correct_indices,
-    explain: raw.explain ?? raw.Explain,
-  };
-}
-
 function formatOptionLabel(opts, i) {
   if (i == null || Number.isNaN(Number(i))) return '—';
   const o = opts[Number(i)];
@@ -468,31 +452,24 @@ function formatUserAnswerSummary(qq, answers, qi) {
   return formatOptionLabel(opts, pick);
 }
 
-function extractPracticeQuestions(text) {
-  const blocks = [...(text || '').matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
-  for (const m of blocks) {
-    try {
-      const j = JSON.parse(m[1].trim());
-      if (Array.isArray(j) && j.length && (j[0].question != null || j[0].Question != null)) {
-        return j.map(normalizePracticeItem).filter(Boolean);
-      }
-    } catch {
-      /* continue */
-    }
-  }
-  return null;
+function practiceOptionText(option) {
+  return String(option ?? '').replace(/^\s*[A-H]\s*[.)、：:]\s*/i, '').trim();
 }
 
-export function PracticePackQuizWindow({ open, rawMarkdown, onClose }) {
+export function PracticePackQuizWindow({ open, rawMarkdown, onClose, onResult }) {
   const questions = useMemo(() => extractPracticeQuestions(rawMarkdown || '') || [], [rawMarkdown]);
   const [idx, setIdx] = useState(0);
   const [answers, setAnswers] = useState({});
   const [phase, setPhase] = useState('answer');
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState('');
   useEffect(() => {
     if (open) {
       setIdx(0);
       setAnswers({});
       setPhase('answer');
+      setSyncing(false);
+      setSyncError('');
     }
   }, [open, rawMarkdown]);
 
@@ -504,105 +481,121 @@ export function PracticePackQuizWindow({ open, rawMarkdown, onClose }) {
     setAnswers((a) => ({ ...a, [qi]: v }));
   };
 
-  const scoreLocal = () => {
-    let ok = 0;
-    questions.forEach((qq, i) => {
-      const t = (qq.type || '').toLowerCase();
-      const pick = answers[i];
-      if (t === 'multi') {
-        const want = Array.isArray(qq.correct_indices) ? qq.correct_indices : [];
-        const got = Array.isArray(pick) ? pick : [];
-        if (want.length === got.length && want.every((x) => got.includes(x))) ok += 1;
-      } else {
-        const want = qq.correct_index;
-        if (want != null && pick != null && Number(pick) === Number(want)) ok += 1;
-      }
-    });
-    return { ok, total };
-  };
+  const scoreLocal = () => buildAssessmentResults(questions, questions.map((_, index) => answers[index]));
 
   if (!total) {
     return (
-      <ResizableStudioShell title="混合题型练习包" subtitle="未解析到题目 JSON，请查看原文" onClose={onClose}>
-        <div className="max-h-[70vh] overflow-y-auto p-6">
-          <ChatLikeMarkdown content={rawMarkdown || ''} />
+      <ResizableStudioShell
+        title="练习包暂时无法打开"
+        subtitle="题目格式没有整理完整"
+        onClose={onClose}
+        className="studio-practice-shell"
+      >
+        <div className="practice-parse-error">
+          <span>FORMAT</span>
+          <h3>这次题目没有排成可作答格式</h3>
+          <p>关闭窗口后点击“开始整理”重新生成即可。原始 JSON 不再直接展示，避免干扰阅读。</p>
         </div>
       </ResizableStudioShell>
     );
   }
 
   if (phase === 'result') {
-    const { ok, total: t } = scoreLocal();
+    const result = scoreLocal();
+    const passed = result.passed;
+    const resultDownload = assessmentMarkdownDownload({
+      title: '混合题型练习包-题目与详细解析',
+      result,
+      questions,
+      answers: questions.map((_, index) => answers[index]),
+    });
     return (
-      <ResizableStudioShell title="练习结果" subtitle={`答对 ${ok} / ${t}`} onClose={onClose}>
-        <div className="flex max-h-[min(78vh,720px)] min-h-[280px] flex-col">
-          <div className="shrink-0 space-y-4 px-6 pb-4 pt-6">
-            <p className="font-display text-2xl text-[#1a1f24]">{ok >= Math.ceil(t * 0.6) ? '通过自测门槛' : '可再试一轮'}</p>
-            <button
-              type="button"
-              onClick={() => {
-                setPhase('answer');
-                setIdx(0);
-                setAnswers({});
-              }}
-              className="rounded-lg border border-[#1a1f24]/[0.12] bg-[#1a1f24] px-5 py-2.5 text-sm font-semibold text-[#faf9f7]"
-            >
-              重新作答
-            </button>
+      <ResizableStudioShell
+        title="练习结果"
+        subtitle={`得分 ${Math.round(result.score)} · 正确 ${result.correct} · 错误 ${result.incorrect}`}
+        onClose={onClose}
+        className="studio-practice-shell"
+      >
+        <div className="practice-result">
+          <div className="practice-result-summary">
+            <div className={`practice-result-mark ${passed ? 'is-passed' : 'is-review'}`} aria-hidden="true">
+              <span>{Math.round(result.score)}</span>
+              <i>分</i>
+            </div>
+            <div className="practice-result-copy">
+              <span>RESULT</span>
+              <h3>{passed ? '这一节已经掌握' : '再梳理一次会更稳'}</h3>
+              <p>正确 {result.correct} 题，错误或需补充 {result.incorrect} 题。</p>
+            </div>
+            <div className="practice-result-actions">
+              <a
+                href={resultDownload.href}
+                download={resultDownload.filename}
+                className="practice-action practice-action-quiet"
+              >
+                导出解析
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  setPhase('answer');
+                  setIdx(0);
+                  setAnswers({});
+                }}
+                className="practice-action practice-action-primary"
+              >
+                重新作答
+              </button>
+            </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-8">
-            <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#1a1f24]/40">逐题解析</p>
-            <ul className="space-y-5">
+          <div className="practice-result-scroll">
+            {syncError && (
+              <p className="practice-sync-warning">
+                结果已在本地生成，但学习规划同步失败：{syncError}
+              </p>
+            )}
+            <div className="practice-section-title">
+              <span>REVIEW</span>
+              <strong>逐题解析</strong>
+            </div>
+            <ul className="practice-review-list">
               {questions.map((qq, qi) => {
-                const isMulti = (qq.type || '').toLowerCase() === 'multi';
-                let isOk = false;
-                if (isMulti) {
-                  const w = Array.isArray(qq.correct_indices) ? qq.correct_indices : [];
-                  const got = Array.isArray(answers[qi]) ? answers[qi] : [];
-                  isOk = w.length === got.length && w.every((x) => got.includes(x));
-                } else {
-                  isOk =
-                    qq.correct_index != null &&
-                    answers[qi] != null &&
-                    Number(answers[qi]) === Number(qq.correct_index);
-                }
+                const item = result.items[qi];
+                const isOk = item?.is_correct;
                 const explain = qq.explain ?? qq.Explain ?? '';
                 return (
                   <li
                     key={qi}
-                    className="list-none rounded-xl border border-[#1a1f24]/[0.08] bg-[#fdfcfa] p-4 shadow-sm"
+                    className={`practice-review-item ${isOk ? 'is-correct' : 'is-wrong'}`}
                   >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full border border-[#1a1f24]/[0.1] bg-white px-2 py-0.5 font-mono text-[10px] text-[#8a6f42]">
-                        第 {qi + 1} 题
-                      </span>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                          isOk ? 'bg-emerald-100 text-emerald-900' : 'bg-amber-100 text-amber-950'
-                        }`}
-                      >
-                        {isOk ? '正确' : '错误'}
-                      </span>
+                    <div className="practice-review-index">
+                      <span>{String(qi + 1).padStart(2, '0')}</span>
+                      <i>{isOk ? '已掌握' : '需回看'}</i>
                     </div>
-                    <p className="mt-3 text-[15px] font-medium leading-relaxed text-[#1a1f24]">{qq.question}</p>
-                    <div className="mt-3 grid gap-2 text-[13px] leading-relaxed sm:grid-cols-2">
-                      <div className="rounded-lg border border-[#1a1f24]/[0.06] bg-white/90 px-3 py-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-[#1a1f24]/38">正确答案</p>
-                        <p className="mt-1 text-[#1a1f24]/88">{formatCorrectAnswerSummary(qq)}</p>
-                      </div>
-                      <div className="rounded-lg border border-[#1a1f24]/[0.06] bg-white/90 px-3 py-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-[#1a1f24]/38">你的作答</p>
-                        <p className="mt-1 text-[#1a1f24]/88">{formatUserAnswerSummary(qq, answers, qi)}</p>
-                      </div>
-                    </div>
-                    {explain ? (
-                      <div className="studio-md-scroll mt-4 rounded-lg border border-[#b8955c]/25 bg-[#faf6ef]/90 px-3 py-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-[#8a6f42]">解析</p>
-                        <div className="mt-2 text-[13px] leading-relaxed text-[#1a1f24]/85">
-                          <ChatLikeMarkdown content={String(explain)} className="!prose-sm" />
+                    <div className="practice-review-body">
+                      <p className="practice-review-question">{qq.question}</p>
+                      <p className="practice-review-score">
+                        {assessmentTypeLabel(qq.type)} · {item?.awarded_points ?? 0}/{item?.points ?? qq.points ?? 1} 分
+                      </p>
+                      <div className="practice-answer-compare">
+                        <div>
+                          <span>正确答案</span>
+                          <p>{assessmentCorrectAnswer(qq)}</p>
+                        </div>
+                        <div>
+                          <span>你的作答</span>
+                          <p>{assessmentUserAnswer(qq, answers[qi])}</p>
                         </div>
                       </div>
-                    ) : null}
+                      {explain ? (
+                        <div className="practice-explanation studio-md-scroll">
+                          <span>解析</span>
+                          <div>
+                            <ChatLikeMarkdown content={String(explain)} className="!prose-sm" />
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   </li>
                 );
               })}
@@ -616,63 +609,100 @@ export function PracticePackQuizWindow({ open, rawMarkdown, onClose }) {
   const opts = q?.options || [];
   const t = (q?.type || 'single').toLowerCase();
   const cur = answers[idx];
+  const answeredCount = questions.filter((question, index) => isAssessmentAnswered(question, answers[index])).length;
 
   return (
-    <ResizableStudioShell title="混合题型练习包" subtitle={`第 ${idx + 1} / ${total} 题`} onClose={onClose}>
-      <div className="flex max-h-[min(78vh,720px)] min-h-[360px] flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#1a1f24]/38">Question</p>
-          <p className="mt-3 text-[16px] font-medium leading-relaxed text-[#1a1f24]">{q?.question}</p>
-          <div className="mt-6 space-y-2">
-            {opts.map((opt, oi) =>
-              t === 'multi' ? (
-                <label
-                  key={oi}
-                  className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#1a1f24]/[0.08] bg-white px-4 py-3 transition-colors hover:border-[#b8955c]/45"
-                >
-                  <input
-                    type="checkbox"
-                    className="mt-1"
-                    checked={Array.isArray(cur) && cur.includes(oi)}
-                    onChange={() => {
-                      const arr = Array.isArray(cur) ? [...cur] : [];
-                      const i = arr.indexOf(oi);
-                      if (i >= 0) arr.splice(i, 1);
-                      else arr.push(oi);
-                      setPick(idx, arr);
-                    }}
-                  />
-                  <span className="text-[14px] leading-relaxed text-[#1a1f24]/85">{opt}</span>
-                </label>
-              ) : (
-                <label
-                  key={oi}
-                  className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#1a1f24]/[0.08] bg-white px-4 py-3 transition-colors hover:border-[#b8955c]/45"
-                >
-                  <input
-                    type="radio"
-                    className="mt-1"
-                    name={`pq-${idx}`}
-                    checked={cur === oi}
-                    onChange={() => setPick(idx, oi)}
-                  />
-                  <span className="text-[14px] leading-relaxed text-[#1a1f24]/85">{opt}</span>
-                </label>
-              )
-            )}
+    <ResizableStudioShell
+      title="混合题型练习包"
+      subtitle={`第 ${idx + 1} / ${total} 题`}
+      onClose={onClose}
+      className="studio-practice-shell"
+    >
+      <div className="practice-quiz">
+        <div className="practice-progress" aria-label={`已完成 ${answeredCount} 题，共 ${total} 题`}>
+          <span style={{ width: `${((idx + 1) / total) * 100}%` }} />
+        </div>
+        <div className="practice-quiz-scroll">
+          <div className="practice-question-meta">
+            <span>QUESTION {String(idx + 1).padStart(2, '0')}</span>
+            <i>{assessmentTypeLabel(t)} · {q?.points || 1} 分</i>
           </div>
+          <p className="practice-paper-section">{q?.section || '综合练习'}</p>
+          <h3 className="practice-question">{q?.question}</h3>
+          {t === 'single' || t === 'multi' ? (
+            <div className="practice-options">
+              {opts.map((opt, oi) => {
+                const selected = t === 'multi' ? Array.isArray(cur) && cur.includes(oi) : cur === oi;
+                return (
+                  <label key={oi} className={`practice-option ${selected ? 'is-selected' : ''}`}>
+                    <input
+                      type={t === 'multi' ? 'checkbox' : 'radio'}
+                      name={t === 'single' ? `pq-${idx}` : undefined}
+                      checked={selected}
+                      onChange={() => {
+                        if (t === 'single') {
+                          setPick(idx, oi);
+                          return;
+                        }
+                        const next = Array.isArray(cur) ? [...cur] : [];
+                        const selectedIndex = next.indexOf(oi);
+                        if (selectedIndex >= 0) next.splice(selectedIndex, 1);
+                        else next.push(oi);
+                        setPick(idx, next);
+                      }}
+                    />
+                    <span className="practice-option-key">{String.fromCharCode(65 + oi)}</span>
+                    <span className="practice-option-text">{practiceOptionText(opt)}</span>
+                    <span className="practice-option-state" aria-hidden="true" />
+                  </label>
+                );
+              })}
+            </div>
+          ) : t === 'true_false' ? (
+            <div className="practice-judge-options">
+              {[true, false].map((value) => (
+                <button
+                  key={String(value)}
+                  type="button"
+                  className={cur === value ? 'is-selected' : ''}
+                  onClick={() => setPick(idx, value)}
+                >
+                  <span>{value ? '✓' : '×'}</span>
+                  {value ? '正确' : '错误'}
+                </button>
+              ))}
+            </div>
+          ) : t === 'fill_blank' ? (
+            <label className="practice-text-answer">
+              <span>填写答案</span>
+              <input
+                type="text"
+                value={typeof cur === 'string' ? cur : ''}
+                onChange={(event) => setPick(idx, event.target.value)}
+                placeholder="在这里填写关键词"
+              />
+            </label>
+          ) : (
+            <label className="practice-text-answer is-long">
+              <span>写下你的理解</span>
+              <textarea
+                value={typeof cur === 'string' ? cur : ''}
+                onChange={(event) => setPick(idx, event.target.value)}
+                placeholder="结合本节资料，用自己的话作答"
+                rows={6}
+              />
+            </label>
+          )}
           {q?.explain && phase === 'answer' && (
-            <p className="mt-6 rounded-lg border border-dashed border-[#b8955c]/35 bg-[#faf6ef]/80 p-3 text-[12px] text-[#1a1f24]/55">
-              提示：提交后可对照解析。
-            </p>
+            <p className="practice-hint">提交后可查看答案与解析。</p>
           )}
         </div>
-        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[#1a1f24]/[0.06] bg-white/90 px-6 py-4">
+        <div className="practice-controls">
           <button
             type="button"
             disabled={idx === 0}
             onClick={() => setIdx((i) => i - 1)}
-            className="rounded-lg border border-[#1a1f24]/[0.1] px-4 py-2 text-sm disabled:opacity-35"
+            className="practice-action practice-action-quiet"
           >
             上一题
           </button>
@@ -680,17 +710,30 @@ export function PracticePackQuizWindow({ open, rawMarkdown, onClose }) {
             <button
               type="button"
               onClick={() => setIdx((i) => i + 1)}
-              className="rounded-lg bg-[#1a1f24] px-5 py-2 text-sm font-semibold text-[#faf9f7]"
+              className="practice-action practice-action-primary"
             >
               下一题
             </button>
           ) : (
             <button
               type="button"
-              onClick={() => setPhase('result')}
-              className="rounded-lg bg-[#b8955c] px-5 py-2 text-sm font-semibold text-[#1a1f24]"
+              onClick={async () => {
+                const result = scoreLocal();
+                setSyncing(true);
+                setSyncError('');
+                try {
+                  await onResult?.(result);
+                } catch (error) {
+                  setSyncError(error?.message || '请稍后回到学习页刷新一次。');
+                } finally {
+                  setSyncing(false);
+                }
+                setPhase('result');
+              }}
+              disabled={answeredCount < total || syncing}
+              className="practice-action practice-action-primary"
             >
-              提交全部
+              {syncing ? '同步中' : '提交全部'}
             </button>
           )}
         </div>
