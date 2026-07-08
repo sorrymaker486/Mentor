@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -509,6 +510,13 @@ function V29RadarTooltip({ active, payload, label }) {
 const V29LearningMap = React.memo(function V29LearningMap({ profile = {} }) {
   const glowId = React.useId().replace(/:/g, '');
   const [hoveredAbility, setHoveredAbility] = useState(null);
+  const chartContainerRef = useRef(null);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const portalTarget = useRef(null);
+
+  useEffect(() => {
+    portalTarget.current = document.querySelector('.dp2-studio');
+  }, []);
   const chartData = v29AbilityAxes.map((axis) => {
     const value = clamp01(profile[axis.key] ?? axis.base, axis.base);
     const rhythm = Math.max(0.28, axis.base + value * 0.36);
@@ -565,6 +573,11 @@ const V29LearningMap = React.memo(function V29LearningMap({ profile = {} }) {
     if (!rect.width || !rect.height) return;
     const x = ((event.clientX - rect.left) / rect.width) * viewBox.width;
     const y = ((event.clientY - rect.top) / rect.height) * viewBox.height;
+    const studioEl = portalTarget.current || chartContainerRef.current;
+    const studioRect = studioEl?.getBoundingClientRect();
+    const relX = studioRect ? event.clientX - studioRect.left : event.clientX - rect.left;
+    const relY = studioRect ? event.clientY - studioRect.top : event.clientY - rect.top;
+    setTooltipPos({ x: relX + 14, y: relY + 14 });
     const nearest = chartData.reduce(
       (best, item) => {
         const point = toPoint(item.angle, item.visualCurrent / 100);
@@ -578,7 +591,7 @@ const V29LearningMap = React.memo(function V29LearningMap({ profile = {} }) {
   };
 
   return (
-    <div className="dp2-ability-map dp2-radar-map" onMouseLeave={() => setHoveredAbility(null)}>
+    <div className="dp2-ability-map dp2-radar-map" ref={chartContainerRef} onMouseLeave={() => setHoveredAbility(null)}>
       <svg
         className="dp2-ability-svg"
         viewBox={`0 0 ${viewBox.width} ${viewBox.height}`}
@@ -656,13 +669,14 @@ const V29LearningMap = React.memo(function V29LearningMap({ profile = {} }) {
         />
         <circle className="dp2-ability-core" cx={center.x} cy={center.y} r="4.4" />
       </svg>
-      {hoveredAbility && (
-        <div className="dp2-ability-tooltip" role="status">
+      {hoveredAbility && portalTarget.current && createPortal(
+        <div className="dp2-ability-tooltip" role="status" style={{ left: tooltipPos.x, top: tooltipPos.y }}>
           <strong>{hoveredAbility.label}</strong>
           <span>{hoveredAbility.hint}</span>
           <p>{`当前：${hoveredAbility.state}`}</p>
           <p>{`节奏：${hoveredAbility.rhythmState}`}</p>
-        </div>
+        </div>,
+        portalTarget.current,
       )}
     </div>
   );

@@ -1503,6 +1503,7 @@ body {
 }
 
 .dp2-studio {
+  position: relative;
   height: min(52rem, calc(100dvh - 4.7rem)) !important;
   min-height: min(42rem, calc(100dvh - 4.7rem)) !important;
 }
@@ -2864,8 +2865,8 @@ body {
 }
 
 .practice-option.is-selected .practice-option-key {
-  border-color: rgba(105, 134, 136, 0.75);
-  background: rgba(105, 134, 136, 0.82);
+  border-color: rgba(82, 108, 111, 0.88);
+  background: rgba(82, 108, 111, 0.94);
   color: #f8f7f2;
 }
 
@@ -2919,14 +2920,14 @@ body {
 
 .practice-judge-options button {
   display: flex;
-  min-height: 5.4rem;
+  min-height: 3.18rem;
+  margin: 4.6885rem 0;
   align-items: center;
   justify-content: center;
   gap: 0.8rem;
   border: 0;
-  border-bottom: 1px solid rgba(91, 112, 111, 0.18);
-  background: linear-gradient(90deg, rgba(105, 134, 136, 0.05), transparent);
-  color: rgba(51, 64, 63, 0.68);
+  border-bottom: 1px solid rgba(91, 112, 111, 0.14);
+  color: rgba(51, 64, 63, 0.75);
   font-family: var(--font-serif);
   font-size: 1.1rem;
   transition:
@@ -2944,13 +2945,27 @@ body {
   border-radius: 50%;
   font-family: var(--font-sans);
   font-size: 0.8rem;
+  color: rgba(51, 64, 63, 0.54);
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    color 180ms ease;
 }
 
 .practice-judge-options button:hover,
 .practice-judge-options button.is-selected {
-  border-color: rgba(105, 134, 136, 0.56);
-  background: linear-gradient(90deg, rgba(105, 134, 136, 0.13), transparent);
-  color: rgba(43, 57, 55, 0.94);
+  color: rgba(43, 57, 55, 0.96);
+  border-bottom-color: rgba(113, 140, 141, 0.44);
+}
+
+.practice-judge-options button:hover {
+  background: linear-gradient(90deg, rgba(105, 134, 136, 0.09), transparent);
+}
+
+.practice-judge-options button.is-selected span {
+  border-color: rgba(82, 108, 111, 0.88);
+  background: rgba(82, 108, 111, 0.94);
+  color: #f8f7f2;
 }
 
 .practice-text-answer {
@@ -3807,8 +3822,6 @@ a.dp2-button {
 
 .dp2-ability-tooltip {
   position: absolute;
-  right: clamp(0.4rem, 1.5vw, 1rem);
-  top: clamp(0.4rem, 1.2vh, 0.85rem);
   z-index: 5;
   display: grid;
   gap: 0.12rem;
