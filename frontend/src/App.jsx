@@ -56,6 +56,53 @@ const buildStudyPath = ({ subject, mode = 'free', panel = 'study' }) => {
   return query ? `${path}?${query}` : path;
 };
 
+const CATALOG_CACHE_TTL = 24 * 60 * 60 * 1000;
+const catalogMemoryCache = new Map();
+
+const catalogCacheKey = (subject) => `mentor_catalog_v2_${encodeURIComponent(subject || '')}`;
+const studyResumeKey = (username, subject) =>
+  `mentor_study_resume_v1_${encodeURIComponent(username || '')}_${encodeURIComponent(subject || '')}`;
+
+const readCatalogCache = (subject) => {
+  if (!subject) return null;
+  const memoryValue = catalogMemoryCache.get(subject);
+  if (memoryValue?.chapters?.length) return memoryValue;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(catalogCacheKey(subject)) || 'null');
+    if (!Array.isArray(parsed?.chapters) || !parsed.chapters.length) return null;
+    catalogMemoryCache.set(subject, parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const writeCatalogCache = (subject, chapters) => {
+  if (!subject || !Array.isArray(chapters) || !chapters.length) return;
+  const value = { savedAt: Date.now(), chapters };
+  catalogMemoryCache.set(subject, value);
+  try {
+    localStorage.setItem(catalogCacheKey(subject), JSON.stringify(value));
+  } catch {
+    /* Storage can be unavailable in private browsing. */
+  }
+};
+
+const readStudyResume = (username, subject) => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(studyResumeKey(username, subject)) || 'null');
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const findCatalogScope = (chapters, chapterId, sectionId) => {
+  const chapter = (chapters || []).find((item) => item.id === chapterId);
+  const section = chapter?.sections?.find((item) => item.id === sectionId);
+  return chapter && section ? { chapterId: chapter.id, sectionId: section.id } : null;
+};
+
 // --- 内部组件：代码块 ---
 const CodeBlock = ({ language, value }) => {
   const [copied, setCopied] = useState(false);
@@ -2844,6 +2891,107 @@ const SubjectGridExactV29 = ({ onSelectSubject, onSwitchAccount, username, apiBa
   );
 };
 
+const V29CatalogChapter = React.memo(function V29CatalogChapter({
+  chapter,
+  chapterIndex,
+  progressSections,
+  selectedChapterId,
+  selectedSectionId,
+  suggestedPathKey,
+  controlWeakKeys,
+  studioPathStepByKey,
+  controlWeakByKey,
+  sessions,
+  setSelectedChapterId,
+  setSelectedSectionId,
+  setLearnMode,
+  setCurrentSessionId,
+}) {
+  const selectedInChapter = chapter.sections.some((item) => item.chapter?.id === selectedChapterId);
+  const [open, setOpen] = useState(() => Boolean(chapter.fallback || selectedInChapter));
+
+  const passedCount = chapter.sections.filter((item) =>
+    isSectionEffectivelyPassed(progressSections?.[item.key])
+  ).length;
+
+  return (
+    <div
+      className={`dp2-path-chapter ${open ? 'is-open' : ''}`}
+      style={{ animationDelay: `${chapterIndex * 90}ms` }}
+    >
+      <button
+        type="button"
+        className="dp2-path-chapter-head"
+        aria-expanded={open}
+        onClick={() => {
+          if (!chapter.fallback) setOpen((value) => !value);
+        }}
+      >
+        <span />
+        <strong>{chapter.title}</strong>
+        <small>{chapter.sections.length ? `${passedCount}/${chapter.sections.length}` : '准备中'}</small>
+      </button>
+      {open && (
+        <div className="dp2-path-section-list">
+          {chapter.sections.map((item) => {
+            const active = item.chapter?.id === selectedChapterId && item.section?.id === selectedSectionId;
+            const isControlCurrent = suggestedPathKey === item.key;
+            const isWeakFocus = controlWeakKeys.has(item.key);
+            const pathStep = item.fallbackIndex == null ? studioPathStepByKey.get(item.key) : null;
+            const controlWeak = item.fallbackIndex == null ? controlWeakByKey.get(item.key) : null;
+            const pathReason = pathStep?.recommended_reason || controlWeak?.recommended_reason || controlWeak?.reason || '';
+            const showPathReason = item.fallbackIndex == null && (isControlCurrent || isWeakFocus || active) && pathReason;
+            const status =
+              item.fallbackIndex != null
+                ? item.fallbackIndex < 2
+                  ? '已点亮'
+                  : item.fallbackIndex === 2
+                    ? '正在看'
+                    : '待点亮'
+                : isSectionEffectivelyPassed(progressSections?.[item.key])
+                  ? '已点亮'
+                  : active
+                    ? '正在看'
+                    : '待点亮';
+            const smartStatus =
+              item.fallbackIndex == null && isControlCurrent
+                ? '建议下一步'
+                : item.fallbackIndex == null && isWeakFocus
+                  ? '重点补'
+                  : status;
+
+            return (
+              <button
+                key={item.key}
+                type="button"
+                className={`dp2-path-item ${active ? 'is-active' : ''} ${isControlCurrent ? 'is-suggested' : ''} ${isWeakFocus ? 'is-weak' : ''}`}
+                title={showPathReason ? pathReason : undefined}
+                onClick={() => {
+                  if (!item.chapter || !item.section) return;
+                  setSelectedChapterId(item.chapter.id);
+                  setSelectedSectionId(item.section.id);
+                  const matched = sessions.find((session) => session.chapter === item.key);
+                  if (matched) {
+                    setLearnMode(matched.session_kind === 'learn');
+                    setCurrentSessionId(matched.id);
+                  } else {
+                    setCurrentSessionId(null);
+                  }
+                }}
+              >
+                <span />
+                <strong>{item.title}</strong>
+                <small>{smartStatus}</small>
+                {showPathReason && <em>{pathReason}</em>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+});
+
 // --- 3. 对话界面：会话列表 + 章节目录（大章 / 小节，数据来自后端 /learning-catalog）---
 const ChatView = ({
   subject,
@@ -2858,8 +3006,10 @@ const ChatView = ({
   const navigate = useNavigate();
   const welcomeMessage = { role: 'assistant', content: `你好 **${username}**，我们从 **${subject}** 里挑一个点，慢慢把它讲亮。` };
 
-  const [catalog, setCatalog] = useState([]);
-  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalog, setCatalog] = useState(() => readCatalogCache(subject)?.chapters || []);
+  const [catalogLoading, setCatalogLoading] = useState(
+    () => !readCatalogCache(subject)?.chapters?.length
+  );
   const [catalogErr, setCatalogErr] = useState('');
   const [expandedChapters, setExpandedChapters] = useState({});
   const [selectedChapterId, setSelectedChapterId] = useState('');
@@ -2919,6 +3069,7 @@ const ChatView = ({
   const guidedAutoStartedRef = useRef(false);
   const smallQuizCacheRef = useRef(new Map());
   const smallQuizRequestRef = useRef(new Map());
+  const initialScopeReadyRef = useRef(false);
 
   useEffect(() => {
     if (!initialOpenHistory) return;
@@ -2929,6 +3080,7 @@ const ChatView = ({
   const preferUiOverHistoryUntilRef = useRef(null);
 
   const progressKey = `section_progress_${username}_${subject}`;
+  const resumeKey = studyResumeKey(username, subject);
   const routeStudioPanel = (nextPanel, options = {}) => {
     const panel = nextPanel === 'resources' ? 'resources' : 'study';
     setStudioPanel(panel);
@@ -3051,7 +3203,7 @@ const ChatView = ({
   };
 
   const loadSessions = async () => {
-    if (!username || !subject) return;
+    if (!username || !subject) return [];
 
     setSessionLoading(true);
     setSessionError('');
@@ -3071,37 +3223,42 @@ const ChatView = ({
       if (list.length === 0) {
         setCurrentSessionId(null);
         setMessages([welcomeMessage]);
-        return;
+        return [];
       }
+      return list;
     } catch (e) {
       console.error(e);
       setSessionError('会话列表加载失败');
       setSessions([]);
+      return [];
     } finally {
       setSessionLoading(false);
     }
   };
 
-  const loadLearningProgress = async () => {
-    if (!username || !subject) return;
+  const loadLearningProgress = async (
+    chapterId = selectedChapterId,
+    sectionId = selectedSectionId
+  ) => {
+    if (!username || !subject) return null;
     try {
       const scopePart =
-        selectedChapterId && selectedSectionId
-          ? `&chapter_id=${encodeURIComponent(selectedChapterId)}&section_id=${encodeURIComponent(selectedSectionId)}`
+        chapterId && sectionId
+          ? `&chapter_id=${encodeURIComponent(chapterId)}&section_id=${encodeURIComponent(sectionId)}`
           : '';
       const r = await fetch(
         `${API_BASE}/learning/progress?username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}${scopePart}`
       );
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) return;
+      if (!r.ok) return null;
       setProgress({
         sections: d.sections || {},
         chapters: d.chapters || {},
         sectionRule: d.section_completion_rule || null,
       });
       const currentKey =
-        selectedChapterId && selectedSectionId
-          ? `${selectedChapterId}|${selectedSectionId}`
+        chapterId && sectionId
+          ? `${chapterId}|${sectionId}`
           : '';
       const sectionWeak = currentKey && Array.isArray(d.sections?.[currentKey]?.weak_points)
         ? d.sections[currentKey].weak_points
@@ -3120,8 +3277,9 @@ const ChatView = ({
           weak_scope_key: currentKey || prev.weak_scope_key || '',
         };
       });
+      return d;
     } catch {
-      /* ignore */
+      return null;
     }
   };
 
@@ -3202,11 +3360,27 @@ const ChatView = ({
   };
 
   useEffect(() => {
-    const saved = localStorage.getItem(progressKey);
-    const parsed = saved ? JSON.parse(saved) : [];
+    let parsed = [];
+    try {
+      parsed = JSON.parse(localStorage.getItem(progressKey) || '[]');
+    } catch {
+      parsed = [];
+    }
     const safeList = Array.isArray(parsed) ? parsed.filter(Boolean) : [];
     setVisitedSections(safeList);
 
+    const cachedCatalog = readCatalogCache(subject);
+    const cachedChapters = cachedCatalog?.chapters || [];
+    const savedResume = readStudyResume(username, subject);
+    const immediateTarget =
+      findCatalogScope(cachedChapters, savedResume?.chapterId, savedResume?.sectionId) ||
+      findCatalogScope(
+        cachedChapters,
+        cachedChapters[0]?.id,
+        cachedChapters[0]?.sections?.[0]?.id
+      );
+
+    initialScopeReadyRef.current = false;
     setCurrentSessionId(null);
     setInputText('');
     setPendingImages([]);
@@ -3214,12 +3388,12 @@ const ChatView = ({
     setSessions([]);
     setSessionQuery('');
     setHistoryOpen(Boolean(initialOpenHistory));
-    setCatalog([]);
+    setCatalog(cachedChapters);
     setCatalogErr('');
-    setCatalogLoading(true);
-    setSelectedChapterId('');
-    setSelectedSectionId('');
-    setExpandedChapters({});
+    setCatalogLoading(!cachedChapters.length);
+    setSelectedChapterId(immediateTarget?.chapterId || '');
+    setSelectedSectionId(immediateTarget?.sectionId || '');
+    setExpandedChapters(immediateTarget ? { [immediateTarget.chapterId]: true } : {});
     setLearnMode(initialMode === 'guided');
     setQuizModal(null);
     setProgress({ sections: {}, chapters: {}, sectionRule: null });
@@ -3237,35 +3411,91 @@ const ChatView = ({
     guidedAutoStartedRef.current = false;
     preferUiOverHistoryUntilRef.current = null;
 
-    loadSessions();
-    refreshLearningState();
-
     let cancelled = false;
-    (async () => {
+
+    const loadCatalog = async () => {
+      const cacheIsFresh =
+        cachedChapters.length &&
+        Date.now() - Number(cachedCatalog?.savedAt || 0) < CATALOG_CACHE_TTL;
+      if (cacheIsFresh) return cachedChapters;
+
       try {
         const r = await fetch(`${API_BASE}/learning-catalog?subject=${encodeURIComponent(subject)}`);
         const data = await r.json().catch(() => ({}));
         if (!r.ok) {
           throw new Error(data?.detail || '章节目录加载失败，请先在后端执行 /seed');
         }
-        const chs = Array.isArray(data.chapters) ? data.chapters : [];
+        const chapters = Array.isArray(data.chapters) ? data.chapters : [];
+        writeCatalogCache(subject, chapters);
+        return chapters;
+      } catch (error) {
+        if (cachedChapters.length) return cachedChapters;
+        throw error;
+      }
+    };
+
+    (async () => {
+      try {
+        const [sessionList, progressData, chs] = await Promise.all([
+          loadSessions(),
+          loadLearningProgress('', ''),
+          loadCatalog(),
+          loadPortraitSignals(),
+          loadStudioPath(),
+        ]);
         if (cancelled) return;
         setCatalog(chs);
-        const ch0 = chs[0];
-        const s0 = ch0?.sections?.[0];
-        if (ch0 && s0) {
-          setSelectedChapterId(ch0.id);
-          setSelectedSectionId(s0.id);
-          setExpandedChapters({ [ch0.id]: true });
+
+        const requestedKind = initialMode === 'guided' ? 'learn' : 'chat';
+        const matchingSessions = sessionList.filter(
+          (session) => (session.session_kind || 'chat') === requestedKind
+        );
+        const latestSession = matchingSessions.find((session) => {
+          const [chapterId, sectionId] = String(session.chapter || '').split('|');
+          return findCatalogScope(chs, chapterId, sectionId);
+        });
+        const [sessionChapterId, sessionSectionId] = String(latestSession?.chapter || '').split('|');
+        const sessionTarget = findCatalogScope(chs, sessionChapterId, sessionSectionId);
+
+        const latestProgressEntry = Object.entries(progressData?.sections || {})
+          .filter(([, value]) => value?.updated_at)
+          .sort(([, a], [, b]) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0];
+        const [progressChapterId, progressSectionId] = String(latestProgressEntry?.[0] || '').split('|');
+        const progressTarget = findCatalogScope(chs, progressChapterId, progressSectionId);
+        const resumeTarget = findCatalogScope(chs, savedResume?.chapterId, savedResume?.sectionId);
+        const firstTarget = findCatalogScope(chs, chs[0]?.id, chs[0]?.sections?.[0]?.id);
+        const target = resumeTarget || sessionTarget || progressTarget || firstTarget;
+
+        if (target) {
+          setSelectedChapterId(target.chapterId);
+          setSelectedSectionId(target.sectionId);
+          setExpandedChapters({ [target.chapterId]: true });
+
+          const targetScope = `${target.chapterId}|${target.sectionId}`;
+          const savedSession = sessionList.find(
+            (session) =>
+              Number(session.id) === Number(savedResume?.sessionId) &&
+              String(session.chapter || '') === targetScope &&
+              (session.session_kind || 'chat') === requestedKind
+          );
+          const targetSession =
+            savedSession ||
+            matchingSessions.find((session) => String(session.chapter || '') === targetScope) ||
+            latestSession;
+          setCurrentSessionId(targetSession?.id ?? null);
+          await loadLearningProgress(target.chapterId, target.sectionId);
         }
-        if (!cancelled) await refreshLearningState();
+        initialScopeReadyRef.current = true;
       } catch (e) {
         if (!cancelled) {
           setCatalogErr(e?.message || '章节目录加载失败');
-          setCatalog([]);
+          if (!cachedChapters.length) setCatalog([]);
         }
       } finally {
-        if (!cancelled) setCatalogLoading(false);
+        if (!cancelled) {
+          initialScopeReadyRef.current = true;
+          setCatalogLoading(false);
+        }
       }
     })();
 
@@ -3280,11 +3510,30 @@ const ChatView = ({
   }, [visitedSections, progressKey]);
 
   useEffect(() => {
+    if (!selectedChapterId || !selectedSectionId) return;
+    try {
+      localStorage.setItem(
+        resumeKey,
+        JSON.stringify({
+          chapterId: selectedChapterId,
+          sectionId: selectedSectionId,
+          sessionId: currentSessionId,
+          mode: learnMode ? 'guided' : 'free',
+          savedAt: Date.now(),
+        })
+      );
+    } catch {
+      /* Storage can be unavailable in private browsing. */
+    }
+  }, [currentSessionId, learnMode, resumeKey, selectedChapterId, selectedSectionId]);
+
+  useEffect(() => {
     if (!username || !subject || !selectedChapterId || !selectedSectionId) return;
+    if (!initialScopeReadyRef.current) return;
     const scopeKey = selectedChapterId && selectedSectionId ? `${selectedChapterId}|${selectedSectionId}` : '';
     setLearningInsights((prev) => ({ ...prev, control: null, weak_points: [], weak_scope_key: scopeKey }));
     setLearningSyncNote('');
-    void refreshLearningState();
+    void loadLearningProgress(selectedChapterId, selectedSectionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [username, subject, selectedChapterId, selectedSectionId]);
 
@@ -3322,12 +3571,6 @@ const ChatView = ({
       .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
     return JSON.stringify({ sections, chapters });
   }, [progress.sections, progress.chapters]);
-
-  useEffect(() => {
-    if (!username || !subject) return;
-    void loadStudioPath();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [username, subject, progressSignal]);
 
   const currentSectionProgress = sessionScopeKey ? progress.sections?.[sessionScopeKey] : null;
   const currentMasteryPercent = Math.round(Math.max(0, Math.min(1, Number(currentSectionProgress?.mastery || 0))) * 100);
@@ -4448,7 +4691,10 @@ const ChatView = ({
   };
 
   const controlPlan = learningInsights?.control || null;
-  const studioPathSteps = Array.isArray(studioPath?.steps) ? studioPath.steps : [];
+  const studioPathSteps = useMemo(
+    () => (Array.isArray(studioPath?.steps) ? studioPath.steps : []),
+    [studioPath]
+  );
   const studioFocusIndex =
     studioPath?.focus_index !== null && studioPath?.focus_index !== undefined
       ? Number(studioPath.focus_index)
@@ -4477,7 +4723,10 @@ const ChatView = ({
     code_lab: '代码实操',
     video_script: '视频脚本',
   };
-  const controlWeakFocus = Array.isArray(controlPlan?.weak_focus) ? controlPlan.weak_focus : [];
+  const controlWeakFocus = useMemo(
+    () => (Array.isArray(controlPlan?.weak_focus) ? controlPlan.weak_focus : []),
+    [controlPlan]
+  );
   const visibleWeakPoints = useMemo(() => {
     const sectionWeak = Array.isArray(currentSectionProgress?.weak_points) ? currentSectionProgress.weak_points : [];
     const insightWeak = Array.isArray(learningInsights?.weak_points) ? learningInsights.weak_points : [];
@@ -4674,29 +4923,36 @@ const ChatView = ({
     await refreshLearningState();
   };
 
-  const v29PathChapters =
-    catalog.length > 0
-      ? catalog.map((chapter) => ({
-          key: chapter.id,
-          title: chapter.title,
-          desc: chapter.desc,
-          chapter,
-          sections: (chapter.sections || []).map((section) => ({
-            key: `${chapter.id}|${section.id}`,
-            title: section.title,
+  const v29PathChapters = useMemo(
+    () =>
+      catalog.length > 0
+        ? catalog.map((chapter) => ({
+            key: chapter.id,
+            title: chapter.title,
+            desc: chapter.desc,
             chapter,
-            section,
-          })),
-        }))
-      : [
-          {
-            key: 'fallback',
-            title: '学习路线',
-            desc: '路线准备好后，会按主线和小步展开。',
-            fallback: true,
-            sections: v29PathItems.map((item, index) => ({ key: item, title: item, fallbackIndex: index })),
-          },
-        ];
+            sections: (chapter.sections || []).map((section) => ({
+              key: `${chapter.id}|${section.id}`,
+              title: section.title,
+              chapter,
+              section,
+            })),
+          }))
+        : [
+            {
+              key: 'fallback',
+              title: '学习路线',
+              desc: '路线准备好后，会按主线和小步展开。',
+              fallback: true,
+              sections: v29PathItems.map((item, index) => ({
+                key: item,
+                title: item,
+                fallbackIndex: index,
+              })),
+            },
+          ],
+    [catalog]
+  );
 
   const openFreshSession = () => {
     setCurrentSessionId(null);
@@ -4966,81 +5222,25 @@ const ChatView = ({
             {!catalogLoading && catalogErr && <div className="dp2-path-item"><span /><strong>路线没铺好</strong><small>{catalogErr}</small></div>}
             {!catalogLoading &&
               !catalogErr &&
-              v29PathChapters.map((chapter, chapterIndex) => {
-                const autoOpen = chapter.sections.some((item) => item.chapter?.id === selectedChapterId);
-                const open = chapter.fallback || (expandedChapters[chapter.key] ?? autoOpen);
-                const passedCount = chapter.sections.filter((item) => isSectionEffectivelyPassed(progress.sections?.[item.key])).length;
-                return (
-                  <div className={`dp2-path-chapter ${open ? 'is-open' : ''}`} key={chapter.key} style={{ animationDelay: `${chapterIndex * 90}ms` }}>
-                    <button
-                      type="button"
-                      className="dp2-path-chapter-head"
-                      onClick={() => {
-                        if (chapter.fallback) return;
-                        setExpandedChapters((prev) => ({ ...prev, [chapter.key]: !open }));
-                      }}
-                    >
-                      <span />
-                      <strong>{chapter.title}</strong>
-                      <small>{chapter.sections.length ? `${passedCount}/${chapter.sections.length}` : '准备中'}</small>
-                    </button>
-                    {open && (
-                      <div className="dp2-path-section-list">
-                        {chapter.sections.map((item, index) => {
-                          const active = item.chapter?.id === selectedChapterId && item.section?.id === selectedSectionId;
-                          const isControlCurrent = suggestedPathKey === item.key;
-                          const isWeakFocus = controlWeakKeys.has(item.key);
-                          const pathStep = item.fallbackIndex == null ? studioPathStepByKey.get(item.key) : null;
-                          const controlWeak = item.fallbackIndex == null ? controlWeakByKey.get(item.key) : null;
-                          const pathReason = pathStep?.recommended_reason || controlWeak?.recommended_reason || controlWeak?.reason || '';
-                          const showPathReason = item.fallbackIndex == null && (isControlCurrent || isWeakFocus || active) && pathReason;
-                          const status =
-                            item.fallbackIndex != null
-                              ? item.fallbackIndex < 2
-                                ? '已点亮'
-                                : item.fallbackIndex === 2
-                                  ? '正在看'
-                                  : '待点亮'
-                              : isSectionEffectivelyPassed(progress.sections?.[item.key])
-                                ? '已点亮'
-                                : active
-                                  ? '正在看'
-                                  : '待点亮';
-                          const smartStatus =
-                            item.fallbackIndex == null && isControlCurrent
-                              ? '建议下一步'
-                              : item.fallbackIndex == null && isWeakFocus
-                                ? '重点补'
-                                : status;
-                          return (
-                            <button
-                              key={item.key}
-                              type="button"
-                              className={`dp2-path-item ${active ? 'is-active' : ''} ${isControlCurrent ? 'is-suggested' : ''} ${isWeakFocus ? 'is-weak' : ''}`}
-                              style={{ animationDelay: `${index * 55}ms` }}
-                              title={showPathReason ? pathReason : undefined}
-                              onClick={() => {
-                                if (!item.chapter || !item.section) return;
-                                setSelectedChapterId(item.chapter.id);
-                                setSelectedSectionId(item.section.id);
-                                setExpandedChapters((prev) => ({ ...prev, [item.chapter.id]: true }));
-                                const matched = sessions.filter((s) => s.chapter === item.key);
-                                setLearnMode(matched[0]?.session_kind === 'learn');
-                                setCurrentSessionId(matched[0]?.id ?? null);
-                              }}
-                            >
-                              <span />
-                              <strong>{item.title}</strong>
-                              <small>{smartStatus}</small>
-                              {showPathReason && <em>{pathReason}</em>}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              v29PathChapters.map((chapter, chapterIndex) => (
+                <V29CatalogChapter
+                  key={`${chapter.key}:${chapter.sections.some((item) => item.chapter?.id === selectedChapterId) ? 'selected' : 'idle'}`}
+                  chapter={chapter}
+                  chapterIndex={chapterIndex}
+                  progressSections={progress.sections}
+                  selectedChapterId={selectedChapterId}
+                  selectedSectionId={selectedSectionId}
+                  suggestedPathKey={suggestedPathKey}
+                  controlWeakKeys={controlWeakKeys}
+                  studioPathStepByKey={studioPathStepByKey}
+                  controlWeakByKey={controlWeakByKey}
+                  sessions={sessions}
+                  setSelectedChapterId={setSelectedChapterId}
+                  setSelectedSectionId={setSelectedSectionId}
+                  setLearnMode={setLearnMode}
+                  setCurrentSessionId={setCurrentSessionId}
+                />
+              ))}
           </section>
         </aside>
       </div>

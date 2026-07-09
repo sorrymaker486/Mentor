@@ -4282,6 +4282,16 @@ def learning_progress(
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         }
 
+    chapter_progress_rows = (
+        db.query(ChapterLearningProgressDB)
+        .filter(
+            ChapterLearningProgressDB.user_id == u.id,
+            ChapterLearningProgressDB.subject == subject,
+        )
+        .all()
+    )
+    chapter_progress_map = {row.chapter_id: row for row in chapter_progress_rows}
+
     chapters_out: Dict[str, Any] = {}
     for ch in sorted(course.chapters, key=lambda x: natural_sort_key(x.id)):
         secs = sections_natural_order(parse_subsections_json(ch.subsections))
@@ -4294,15 +4304,7 @@ def learning_progress(
             st = section_map.get(f"{ch.id}|{sid}")
             if st and st.get("effectively_passed"):
                 passed += 1
-        cq = (
-            db.query(ChapterLearningProgressDB)
-            .filter(
-                ChapterLearningProgressDB.user_id == u.id,
-                ChapterLearningProgressDB.subject == subject,
-                ChapterLearningProgressDB.chapter_id == ch.id,
-            )
-            .first()
-        )
+        cq = chapter_progress_map.get(ch.id)
         chapters_out[ch.id] = {
             "sections_total": total,
             "sections_quiz_passed": passed,
