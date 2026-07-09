@@ -113,12 +113,21 @@ const combineAdjacentInlineMath = (value) => {
   for (let i = 0; i < 6; i += 1) {
     const prev = next;
     next = next
-      .replace(/\$([^$\n]+?)\$\s*([,，;；:：])\s*\$([^$\n]+?)\$/g, (_, a, op, b) => `$${a.trim()}${op} ${b.trim()}$`)
+      .replace(/\$([^$\n]+?)\$\s*([,，;；:：])\s*\$([^$\n]+?)\$/g, (_, a, op, b) => {
+        if (a.trim() === b.trim()) return `$${a.trim()}$ ${op} $${b.trim()}$`;
+        return `$${a.trim()}${op} ${b.trim()}$`;
+      })
       .replace(
         /\$([^$\n]+?)\$\s+([=+\-*/<>|∈∉⊂⊆⊃⊇∪∩∘±])\s+\$([^$\n]+?)\$/g,
-        (_, a, op, b) => `$${a.trim()} ${op} ${b.trim()}$`,
+        (_, a, op, b) => {
+          if (a.trim() === b.trim()) return `$${a.trim()}$ ${op} $${b.trim()}$`;
+          return `$${a.trim()} ${op} ${b.trim()}$`;
+        },
       )
-      .replace(/\$([^$\n]+?)\$\s+\$([^$\n]+?)\$/g, (_, a, b) => `$${a.trim()} ${b.trim()}$`);
+      .replace(/\$([^$\n]+?)\$\s+\$([^$\n]+?)\$/g, (_, a, b) => {
+        if (a.trim() === b.trim()) return `$${a.trim()}$ $${b.trim()}$`;
+        return `$${a.trim()} ${b.trim()}$`;
+      });
     if (next === prev) break;
   }
   return next;
@@ -205,6 +214,10 @@ const normalizeOutsideDelimitedMath = (chunk) =>
         (/^\$\$[\s\S]*\$\$$/.test(part) || /^\$(?!\$)[^$\n]+\$(?!\$)$/.test(part)) &&
         part.length >= 3
       ) {
+        const inner = part.replace(/^\$\$|\$\$$/g, '');
+        if (/[\p{Script=Han}，。！？、；：]/u.test(inner)) {
+          return mergeLooseInlineMath(part);
+        }
         return part;
       }
       return mergeLooseInlineMath(part);
@@ -221,6 +234,13 @@ export function normalizeMathText(text) {
     .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `$$${m.trim()}$$`);
 
   t = t.replace(/`([^`]*?(?:\\frac|\\lim|\\sum|\\int|\\sqrt|\\to|=|\^|_)[^`]*)`/g, (_, m) => m);
+
+  t = t.replace(/\$\$([^\n$]{1,200}?)\$\$/g, (match, body) => {
+    if (/[\p{Script=Han}，。！？、；：]/u.test(body)) {
+      return body.trim();
+    }
+    return match;
+  });
 
   for (let i = 0; i < 3; i += 1) {
     const next = t
