@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import katex from 'katex';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { normalizeMathText } from './markdownMathNormalize.js';
 
 test('preserves complete display and inline math regions', () => {
@@ -64,4 +69,44 @@ test('repairs unmatched display markers around mixed Chinese and math', () => {
     const html = katex.renderToString(expression, { throwOnError: false });
     assert.doesNotMatch(html, /katex-error/);
   }
+});
+
+test('does not turn numbered list markers into math delimiters', () => {
+  const source = String.raw`## 小例子
+**判断下面哪个是函数？**
+1. $y = x^2$，定义域为全体实数 $\mathbb{R}$。
+2. $y = \sqrt{x}$，定义域为 $x \ge 0$。
+3. $y = \pm \sqrt{x}$，定义域为 $x \ge 0$。
+
+**一步步看**：
+- 例1：每个 $x$ 代入，$x^2$ 只有一个结果。`;
+
+  const output = normalizeMathText(source);
+
+  assert.doesNotMatch(output, /\$\d+\.\$/);
+  assert.doesNotMatch(output, /\$\$y\s*=/);
+  assert.match(output, /\n1\. \$y = x\^2\$/);
+  assert.match(output, /\n2\. \$y = \\sqrt\{x\}\$/);
+  assert.match(output, /\n3\. \$y = \\pm \\sqrt\{x\}\$/);
+
+  const expressions = [...output.matchAll(/\$([^$\n]+)\$/g)].map((match) => match[1]);
+  for (const expression of expressions) {
+    const html = katex.renderToString(expression, { throwOnError: false });
+    assert.doesNotMatch(html, /katex-error/);
+  }
+
+  const rendered = renderToStaticMarkup(
+    React.createElement(
+      ReactMarkdown,
+      {
+        remarkPlugins: [remarkMath],
+        rehypePlugins: [[rehypeKatex, { strict: false }]],
+      },
+      output,
+    ),
+  );
+  assert.match(rendered, /<ol>/);
+  const orderedList = rendered.match(/<ol>([\s\S]*?)<\/ol>/)?.[1] || '';
+  assert.equal((orderedList.match(/<li>/g) || []).length, 3);
+  assert.doesNotMatch(rendered, /katex-error/);
 });

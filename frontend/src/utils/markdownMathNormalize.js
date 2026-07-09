@@ -37,6 +37,7 @@ const inlineMathPart = (value) => {
     return body ? `$${body}$` : null;
   }
   const body = cleanMathBody(part);
+  if (/^\d{1,4}(?:[.)]|\u3001|\uff0e)$/.test(body || '')) return null;
   if (body && (mathSymbolOnly.test(body) || looseMathExpression.test(body))) return `$${body}$`;
   return null;
 };
@@ -201,7 +202,12 @@ const mergeLooseInlineMath = (chunk) => {
 
   const joinSoftBreaks = (value) => {
     const trimmed = value.trim();
-    return blockLike.test(trimmed) ? trimmed : trimmed.replace(/[ \t]*\n[ \t]*/g, ' ');
+    const containsSplitListMarker = value
+      .split('\n')
+      .some((line) => listItemLike.test(line) || /^\s*\d+\.\s*$/.test(line));
+    return blockLike.test(trimmed) || containsSplitListMarker
+      ? trimmed
+      : trimmed.replace(/[ \t]*\n[ \t]*/g, ' ');
   };
 
   for (let i = 0; i < parts.length; i += 1) {
@@ -226,8 +232,8 @@ const mergeLooseInlineMath = (chunk) => {
   return tidyInlineMath(compactInlineMathParagraphs(combineAdjacentInlineMath(out.join('\n\n'))));
 };
 
-const normalizeOutsideDelimitedMath = (chunk) =>
-  String(chunk || '')
+const normalizeOutsideDelimitedMath = (chunk) => {
+  const normalized = String(chunk || '')
     .split(delimitedMathPattern)
     .map((part) => {
       if (
@@ -243,6 +249,8 @@ const normalizeOutsideDelimitedMath = (chunk) =>
       return mergeLooseInlineMath(part);
     })
     .join('');
+  return normalized.replace(/(^|\n)(\s*\d+\.)\$(?!\$)/g, '$1$2 $');
+};
 
 export function normalizeMathText(text) {
   if (!text) return text;
