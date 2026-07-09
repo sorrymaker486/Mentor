@@ -2912,6 +2912,9 @@ const ChatView = ({
   const rafRef = useRef(null);
   const readerRef = useRef(null);
   const quizStripRef = useRef(null);
+  const quizIndexRef = useRef(0);
+  const quizWheelRemainderRef = useRef(0);
+  const quizWheelSnapTimerRef = useRef(null);
   const mindMapAbortRef = useRef(null);
   const guidedAutoStartedRef = useRef(false);
   const smallQuizCacheRef = useRef(new Map());
@@ -4397,18 +4400,51 @@ const ChatView = ({
     quizPicks.length === quizQuestions.length &&
     quizQuestions.every((question, index) => isAssessmentAnswered(question, quizPicks[index]));
 
+  const centerQuizStripItem = (index, behavior = 'smooth') => {
+    const strip = quizStripRef.current;
+    if (!strip) return;
+    const target = strip.querySelector(`[data-quiz-index="${index}"]`);
+    if (!target) return;
+    const centeredTop = target.offsetTop - (strip.clientHeight - target.offsetHeight) / 2;
+    const maxTop = Math.max(0, strip.scrollHeight - strip.clientHeight);
+    strip.scrollTo({
+      top: Math.max(0, Math.min(centeredTop, maxTop)),
+      behavior,
+    });
+  };
+
+  useEffect(() => {
+    quizIndexRef.current = quizIndex;
+  }, [quizIndex]);
+
   useEffect(() => {
     if (!quizModal || quizResult || quizQuestions.length === 0) return;
-    const strip = quizStripRef.current;
-    const target = strip?.querySelector(`[data-quiz-index="${quizIndex}"]`);
-    target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    centerQuizStripItem(quizIndex, 'smooth');
   }, [quizIndex, quizModal, quizQuestions.length, quizResult]);
+
+  useEffect(() => () => {
+    if (quizWheelSnapTimerRef.current) {
+      window.clearTimeout(quizWheelSnapTimerRef.current);
+    }
+  }, []);
 
   const handleQuizWheel = (event) => {
     if (quizQuestions.length <= 1) return;
+    event.preventDefault();
     event.stopPropagation();
-    const direction = event.deltaY > 0 ? 1 : -1;
-    setQuizIndex((index) => Math.max(0, Math.min(quizQuestions.length - 1, index + direction)));
+    quizWheelRemainderRef.current += event.deltaY;
+    if (Math.abs(quizWheelRemainderRef.current) < 52) return;
+    const direction = quizWheelRemainderRef.current > 0 ? 1 : -1;
+    quizWheelRemainderRef.current = 0;
+    const nextIndex = Math.max(0, Math.min(quizQuestions.length - 1, quizIndexRef.current + direction));
+    quizIndexRef.current = nextIndex;
+    setQuizIndex(nextIndex);
+    if (quizWheelSnapTimerRef.current) {
+      window.clearTimeout(quizWheelSnapTimerRef.current);
+    }
+    quizWheelSnapTimerRef.current = window.setTimeout(() => {
+      centerQuizStripItem(nextIndex, 'auto');
+    }, 40);
   };
 
   const controlPlan = learningInsights?.control || null;
@@ -4520,9 +4556,6 @@ const ChatView = ({
     return map;
   }, [controlWeakFocus]);
   const suggestedPathKey = controlPlan?.next?.key || controlPlan?.current?.key || studioFocusKey || '';
-  const controlResourceEvidence = Array.isArray(controlPlan?.resource_evidence)
-    ? controlPlan.resource_evidence
-    : [];
   const studioPathEvidence = Array.isArray(studioFocusStep?.evidence) ? studioFocusStep.evidence : [];
   const planRecommendationCopy =
     adaptiveRecommendedResourceKey && adaptiveRecommendedResourceReason
@@ -4719,7 +4752,7 @@ const ChatView = ({
     <V29PageShell variant="studio">
       <div className="dp2-studio">
         <aside className="dp2-portrait">
-          <div className="dp2-mini-label">TRACE</div>
+          <div className="dp2-mini-label">能力画像</div>
           <h2>学习能力图</h2>
           <p>用图形观察理解、推理和复盘的变化。</p>
           <V29LearningMapPanel
@@ -4900,20 +4933,9 @@ const ChatView = ({
                 ))}
               </div>
             )}
-            {controlResourceEvidence.length > 0 && (
-              <div className="dp2-plan-evidence">
-                <span>TRACE</span>
-                {controlResourceEvidence.slice(0, 3).map((event, index) => (
-                  <p key={`${event.resource_type || 'event'}-${event.created_at || index}`}>
-                    <b>{event.resource_type || 'resource'}</b>
-                    {event.summary ? ` · ${String(event.summary).slice(0, 64)}` : ''}
-                  </p>
-                ))}
-              </div>
-            )}
             {studioPathEvidence.length > 0 && (
               <div className="dp2-plan-evidence">
-                <span>PATH</span>
+                <span>学习依据</span>
                 {studioPathEvidence.slice(0, 3).map((item, index) => (
                   <p key={`${item}-${index}`}>{item}</p>
                 ))}
@@ -4921,7 +4943,7 @@ const ChatView = ({
             )}
             {studioPathErr && (
               <div className="dp2-plan-evidence">
-                <span>PATH</span>
+                <span>学习依据</span>
                 <p>{studioPathErr}</p>
               </div>
             )}
@@ -4945,7 +4967,8 @@ const ChatView = ({
             {!catalogLoading &&
               !catalogErr &&
               v29PathChapters.map((chapter, chapterIndex) => {
-                const open = chapter.fallback || expandedChapters[chapter.key] || chapter.sections.some((item) => item.chapter?.id === selectedChapterId);
+                const autoOpen = chapter.sections.some((item) => item.chapter?.id === selectedChapterId);
+                const open = chapter.fallback || (expandedChapters[chapter.key] ?? autoOpen);
                 const passedCount = chapter.sections.filter((item) => isSectionEffectivelyPassed(progress.sections?.[item.key])).length;
                 return (
                   <div className={`dp2-path-chapter ${open ? 'is-open' : ''}`} key={chapter.key} style={{ animationDelay: `${chapterIndex * 90}ms` }}>

@@ -1452,12 +1452,16 @@ body {
 .dp2-functional-modal {
   position: fixed;
   inset: 0;
-  z-index: 90;
+  z-index: 360;
   display: grid;
   place-items: center;
   padding: clamp(0.8rem, 2.2vh, 1.4rem) clamp(1rem, 2.8vw, 2rem);
   background: rgba(51, 64, 63, 0.18);
   backdrop-filter: blur(12px);
+}
+
+.dp2-stage-inner:has(.dp2-functional-modal) {
+  z-index: 80 !important;
 }
 
 .dp2-functional-modal > .dp2-quiz,
@@ -1471,26 +1475,39 @@ body {
 
 .dp2-modal-close {
   position: absolute;
-  top: clamp(0.9rem, 2vh, 1.35rem);
-  right: clamp(1rem, 2vw, 1.55rem);
-  z-index: 5;
+  top: clamp(1.05rem, 2.4vh, 1.6rem);
+  right: clamp(2.6rem, 5vw, 4.8rem);
+  z-index: 20;
+  min-width: 4.6rem;
   border: 0;
-  border-bottom: 1px solid rgba(95, 111, 109, 0.26);
-  border-radius: 0;
-  padding: 0.24rem 0.12rem 0.32rem;
-  background: transparent;
-  color: rgba(61, 75, 73, 0.72);
+  border-radius: 999px;
+  padding: 0.34rem 0.72rem 0.4rem;
+  background: rgba(250, 249, 244, 0.48);
+  color: rgba(43, 57, 55, 0.94);
   font-family: var(--font-sans);
-  font-size: 0.76rem;
+  font-size: 0.86rem;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  box-shadow: 0 12px 32px rgba(51, 64, 63, 0.08);
+  backdrop-filter: blur(8px);
   cursor: pointer;
-  transition: color 180ms ease, border-color 180ms ease, transform 180ms ease;
+  transition: color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+
+.dp2-modal-close::before {
+  content: "×";
+  margin-right: 0.28rem;
+  color: rgba(147, 112, 72, 0.82);
+  font-size: 1rem;
+  line-height: 1;
 }
 
 .dp2-modal-close:hover {
   color: rgba(51, 64, 63, 0.96);
-  border-color: rgba(180, 146, 113, 0.5);
+  background: rgba(250, 249, 244, 0.68);
   transform: translateY(-1px);
 }
 
@@ -2011,12 +2028,42 @@ body {
 
 .dp2-quiz-focus {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows:
+    minmax(0, 1fr)
+    auto
+    auto
+    auto
+    auto
+    minmax(0, 0.88fr)
+    auto !important;
+  align-content: stretch !important;
+  gap: clamp(0.5rem, 1.18vh, 0.76rem) !important;
   min-height: 0 !important;
   overflow: hidden !important;
   overscroll-behavior: contain;
   scrollbar-width: none;
   padding-right: 0.2rem;
+}
+
+.dp2-quiz-focus > span {
+  grid-row: 2;
+}
+
+.dp2-quiz-focus > .dp2-quiz-type {
+  grid-row: 3;
+}
+
+.dp2-quiz-focus > h3 {
+  grid-row: 4;
+}
+
+.dp2-quiz-focus > .dp2-options,
+.dp2-quiz-focus > .dp2-quiz-text-answer {
+  grid-row: 5;
+}
+
+.dp2-quiz-focus > .dp2-quiz-actions {
+  grid-row: 7;
 }
 
 .dp2-quiz-focus::-webkit-scrollbar {
@@ -2025,19 +2072,20 @@ body {
 
 .dp2-quiz-strip {
   position: relative;
-  align-self: stretch;
+  align-self: center;
   min-height: 0 !important;
-  height: 100% !important;
-  max-height: min(32rem, calc(100dvh - 12rem)) !important;
+  height: min(30rem, 60dvh) !important;
+  max-height: min(30rem, calc(100dvh - 14rem)) !important;
   display: grid !important;
   align-content: start !important;
   gap: 0.42rem !important;
   overflow-y: auto !important;
   overscroll-behavior: contain;
   scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
   scrollbar-width: none;
-  padding: min(15vh, 5.8rem) 0 !important;
-  mask-image: linear-gradient(to bottom, transparent, black 16%, black 84%, transparent);
+  padding: min(28dvh, 13.2rem) 0 !important;
+  mask-image: linear-gradient(to bottom, transparent, black 18%, black 82%, transparent);
 }
 
 .dp2-quiz-strip::-webkit-scrollbar {
@@ -2128,7 +2176,7 @@ body {
 .dp2-quiz-actions {
   justify-content: center;
   align-self: end;
-  padding-top: clamp(0.7rem, 1.7vh, 1.15rem);
+  padding-top: clamp(0.45rem, 1.1vh, 0.8rem);
   padding-bottom: clamp(0.45rem, 1.2vh, 0.85rem);
 }
 
@@ -5035,7 +5083,15 @@ a.dp2-button {
   gap: 0.72rem !important;
   padding-right: 0.1rem !important;
   padding-left: 0.18rem !important;
-  overflow: visible !important;
+  min-height: 0 !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.dp2-path::-webkit-scrollbar {
+  display: none;
 }
 
 .dp2-path-chapter {
