@@ -3,6 +3,7 @@
 // pattern where short math symbols are emitted as separate lines.
 
 const mathFencePattern = /(```[\s\S]*?```|~~~[\s\S]*?~~~)/g;
+const delimitedMathPattern = /(\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$(?!\$))/g;
 
 const blockLike = /^\s*(#{1,6}\s|[-*+]\s+|\d+\.\s+|>|```|~~~|\|)/;
 const listItemLike = /^\s*(?:[-*+]\s+|\d+\.\s+)/;
@@ -196,6 +197,20 @@ const mergeLooseInlineMath = (chunk) => {
   return tidyInlineMath(compactInlineMathParagraphs(combineAdjacentInlineMath(out.join('\n\n'))));
 };
 
+const normalizeOutsideDelimitedMath = (chunk) =>
+  String(chunk || '')
+    .split(delimitedMathPattern)
+    .map((part) => {
+      if (
+        (/^\$\$[\s\S]*\$\$$/.test(part) || /^\$(?!\$)[^$\n]+\$(?!\$)$/.test(part)) &&
+        part.length >= 3
+      ) {
+        return part;
+      }
+      return mergeLooseInlineMath(part);
+    })
+    .join('');
+
 export function normalizeMathText(text) {
   if (!text) return text;
 
@@ -220,6 +235,6 @@ export function normalizeMathText(text) {
 
   return t
     .split(mathFencePattern)
-    .map((chunk) => (/^(```|~~~)/.test(chunk) ? chunk : mergeLooseInlineMath(chunk)))
+    .map((chunk) => (/^(```|~~~)/.test(chunk) ? chunk : normalizeOutsideDelimitedMath(chunk)))
     .join('');
 }

@@ -5061,12 +5061,6 @@ a.dp2-button {
   max-width: 100%;
 }
 
-.dp2-bubble .katex span {
-  display: inline-block !important;
-  width: auto !important;
-  margin-bottom: 0 !important;
-}
-
 .dp2-bubble .katex .katex-mathml {
   position: absolute !important;
 }

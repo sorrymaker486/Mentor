@@ -58,6 +58,7 @@ const buildStudyPath = ({ subject, mode = 'free', panel = 'study' }) => {
 
 const CATALOG_CACHE_TTL = 24 * 60 * 60 * 1000;
 const catalogMemoryCache = new Map();
+const pendingJsonRequests = new Map();
 
 const catalogCacheKey = (subject) => `mentor_catalog_v2_${encodeURIComponent(subject || '')}`;
 const studyResumeKey = (username, subject) =>
@@ -101,6 +102,26 @@ const findCatalogScope = (chapters, chapterId, sectionId) => {
   const chapter = (chapters || []).find((item) => item.id === chapterId);
   const section = chapter?.sections?.find((item) => item.id === sectionId);
   return chapter && section ? { chapterId: chapter.id, sectionId: section.id } : null;
+};
+
+const fetchJsonDeduped = async (url) => {
+  const requestKey = String(url);
+  const pending = pendingJsonRequests.get(requestKey);
+  if (pending) return pending;
+
+  const request = fetch(requestKey).then(async (response) => ({
+    ok: response.ok,
+    status: response.status,
+    data: await response.json().catch(() => ({})),
+  }));
+  pendingJsonRequests.set(requestKey, request);
+  try {
+    return await request;
+  } finally {
+    if (pendingJsonRequests.get(requestKey) === request) {
+      pendingJsonRequests.delete(requestKey);
+    }
+  }
 };
 
 // --- 内部组件：代码块 ---
@@ -2757,9 +2778,8 @@ const SubjectGridExactV29 = ({ onSelectSubject, onSwitchAccount, username, apiBa
       try {
         setCourseErr('');
         const qs = username ? `?username=${encodeURIComponent(username)}` : '';
-        const r = await fetch(`${apiBase}/courses${qs}`);
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(formatApiDetail(data) || data?.detail || '课程列表暂时不可用');
+        const { ok, data } = await fetchJsonDeduped(`${apiBase}/courses${qs}`);
+        if (!ok) throw new Error(formatApiDetail(data) || data?.detail || '课程列表暂时不可用');
         if (!cancelled) setRemoteCourses(Array.isArray(data.courses) ? data.courses : []);
       } catch (e) {
         if (!cancelled) {
@@ -3210,10 +3230,9 @@ const ChatView = ({
 
     try {
       const url = `${API_BASE}/sessions/${encodeURIComponent(username)}/${encodeURIComponent(subject)}`;
-      const response = await fetch(url);
-      const data = await response.json().catch(() => []);
+      const { ok, data } = await fetchJsonDeduped(url);
 
-      if (!response.ok) {
+      if (!ok) {
         throw new Error(data?.detail || '会话列表加载失败');
       }
 
@@ -3246,11 +3265,10 @@ const ChatView = ({
         chapterId && sectionId
           ? `&chapter_id=${encodeURIComponent(chapterId)}&section_id=${encodeURIComponent(sectionId)}`
           : '';
-      const r = await fetch(
+      const { ok, data: d } = await fetchJsonDeduped(
         `${API_BASE}/learning/progress?username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}${scopePart}`
       );
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) return null;
+      if (!ok) return null;
       setProgress({
         sections: d.sections || {},
         chapters: d.chapters || {},
@@ -3286,11 +3304,10 @@ const ChatView = ({
   const loadStudioPath = async () => {
     if (!username || !subject) return;
     try {
-      const r = await fetch(
+      const { ok, data: d } = await fetchJsonDeduped(
         `${API_BASE}/learning/studio/path?username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}`
       );
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) {
+      if (!ok) {
         setStudioPathErr(formatApiDetail(d) || '');
         return;
       }
@@ -3304,11 +3321,10 @@ const ChatView = ({
   const loadPortraitSignals = async () => {
     if (!username || !subject) return;
     try {
-      const r = await fetch(
+      const { ok, data: d } = await fetchJsonDeduped(
         `${API_BASE}/learning/studio/portrait?username=${encodeURIComponent(username)}&subject=${encodeURIComponent(subject)}`
       );
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) return;
+      if (!ok) return;
       setPortraitSignals(d.portrait || null);
     } catch {
       /* ignore */
@@ -3420,9 +3436,10 @@ const ChatView = ({
       if (cacheIsFresh) return cachedChapters;
 
       try {
-        const r = await fetch(`${API_BASE}/learning-catalog?subject=${encodeURIComponent(subject)}`);
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) {
+        const { ok, data } = await fetchJsonDeduped(
+          `${API_BASE}/learning-catalog?subject=${encodeURIComponent(subject)}`
+        );
+        if (!ok) {
           throw new Error(data?.detail || '章节目录加载失败，请先在后端执行 /seed');
         }
         const chapters = Array.isArray(data.chapters) ? data.chapters : [];
@@ -3910,12 +3927,38 @@ const ChatView = ({
 
   useEffect(() => {
     if (initialMode !== 'guided') return;
-    if (guidedAutoStartedRef.current || catalogLoading || isLoading) return;
+    if (!initialScopeReadyRef.current || guidedAutoStartedRef.current) return;
+    if (catalogLoading || sessionLoading || isLoading) return;
     if (!selectedChapterId || !selectedSectionId) return;
+
+    const existingSession = sessions.find(
+      (session) =>
+        session.chapter === sessionScopeKey &&
+        (session.session_kind || 'chat') === 'learn'
+    );
+    if (existingSession) {
+      guidedAutoStartedRef.current = true;
+      setLearnMode(true);
+      if (Number(existingSession.id) !== Number(currentSessionId)) {
+        setCurrentSessionId(existingSession.id);
+      }
+      return;
+    }
+
     guidedAutoStartedRef.current = true;
     void startLearn();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMode, selectedChapterId, selectedSectionId, catalogLoading, isLoading]);
+  }, [
+    initialMode,
+    selectedChapterId,
+    selectedSectionId,
+    sessionScopeKey,
+    sessions,
+    currentSessionId,
+    catalogLoading,
+    sessionLoading,
+    isLoading,
+  ]);
 
   const startRemedialLearn = async (quizResult) => {
     if (!selectedChapterId || !selectedSectionId) return;
