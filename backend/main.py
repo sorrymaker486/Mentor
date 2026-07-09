@@ -3713,7 +3713,16 @@ def learning_studio_practice_result(body: StudioPracticeResultBody, db: Session 
 
 
 @app.get("/courses")
-def list_courses(db: Session = Depends(get_db)):
+def list_courses(request: Request, db: Session = Depends(get_db)):
+    # BrowserRouter uses /courses as a page URL while the API uses the same
+    # path behind /api. A document navigation asks for HTML; API fetches do not.
+    if "text/html" in request.headers.get("accept", "").lower():
+        sd = static_site_dir()
+        if sd is not None:
+            index = sd / "index.html"
+            if index.is_file():
+                return FileResponse(index, headers={"Cache-Control": "no-cache"})
+
     courses = sorted(db.query(CourseDB).all(), key=lambda x: natural_sort_key(x.id))
     result = []
     for course in courses:
@@ -5165,3 +5174,12 @@ if _sd_root is not None:
         _p = _sd_root / _name
         if _p.is_file():
             app.add_api_route(f"/{_name}", _public_file_handler(_p), methods=["GET"])
+
+    @app.get("/{frontend_path:path}", include_in_schema=False)
+    async def mentor_spa_fallback(frontend_path: str, request: Request):
+        if "text/html" not in request.headers.get("accept", "").lower():
+            raise HTTPException(status_code=404, detail="Not Found")
+        index = _sd_root / "index.html"
+        if not index.is_file():
+            raise HTTPException(status_code=404, detail="Not Found")
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})

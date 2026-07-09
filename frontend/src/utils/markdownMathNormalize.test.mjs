@@ -44,3 +44,24 @@ test('still joins detached short math fragments outside delimited math', () => {
 
   assert.equal(output.replaceAll(' ', ''), '集合$x$中的元素映射到$y$');
 });
+
+test('repairs unmatched display markers around mixed Chinese and math', () => {
+  const source = String.raw`1.$$y = x^2，定义域为全体实数 $\mathbb{R}$。
+2.$$y = \sqrt{x}，定义域为 x ≥ 0。
+3.$$y = \pm \sqrt{x}，定义域为 x ≥ 0。`;
+
+  const output = normalizeMathText(source);
+
+  assert.doesNotMatch(output, /\$\$/);
+  assert.ok(output.includes(String.raw`$y = x^2$`));
+  assert.ok(output.includes(String.raw`$y = \sqrt{x}$`));
+  assert.ok(output.includes(String.raw`$y = \pm \sqrt{x}$`));
+  assert.ok(output.includes(String.raw`$x \ge 0$`));
+
+  const expressions = [...output.matchAll(/\$([^$\n]+)\$/g)].map((match) => match[1]);
+  assert.ok(expressions.length >= 6);
+  for (const expression of expressions) {
+    const html = katex.renderToString(expression, { throwOnError: false });
+    assert.doesNotMatch(html, /katex-error/);
+  }
+});

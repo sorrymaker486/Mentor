@@ -166,8 +166,28 @@ const tidyInlineMath = (value) =>
     return `$${cleaned}$`;
   });
 
+const embeddedEquationPattern =
+  /(^|[^$\w\\])([A-Za-z]\s*=\s*(?:\\pm\s*)?(?:\\sqrt\{[^{}\n]+\}|[A-Za-z0-9]+(?:\s*\^\s*(?:\{[^{}\n]+\}|[-+A-Za-z0-9]+))?))(?=$|[\s\u3002\uff0c\uff1b\uff1a,;:])/gm;
+const embeddedRelationPattern =
+  /(^|[^$\w\\])([A-Za-z]\s*(?:\\ge|\\le|>=|<=|\u2265|\u2264|>|<)\s*-?\d+(?:\.\d+)?)(?=$|[\s\u3002\uff0c\uff1b\uff1a,;:])/gm;
+
+const repairLooseMathMarkup = (value) =>
+  String(value || '')
+    // This function only receives text outside a complete math region, so
+    // remaining display markers are unmatched model output.
+    .replace(/\$\$/g, '')
+    .replace(embeddedEquationPattern, (_, lead, expression) => `${lead}$${expression.trim()}$`)
+    .replace(embeddedRelationPattern, (_, lead, expression) => {
+      const normalized = expression
+        .replace(/\u2265|>=/g, String.raw`\ge `)
+        .replace(/\u2264|<=/g, String.raw`\le `)
+        .replace(/\s+/g, ' ')
+        .trim();
+      return `${lead}$${normalized}$`;
+    });
+
 const mergeLooseInlineMath = (chunk) => {
-  const prepared = collapseDetachedMathRuns(chunk).replace(
+  const prepared = collapseDetachedMathRuns(repairLooseMathMarkup(chunk)).replace(
     /(^|\n)\s*\$\$\s*([\s\S]{1,160}?)\s*\$\$\s*(?=\n|$)/g,
     (match, lead, body) => {
       const expr = cleanMathBody(body);
@@ -234,6 +254,11 @@ export function normalizeMathText(text) {
     .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `$$${m.trim()}$$`);
 
   t = t.replace(/`([^`]*?(?:\\frac|\\lim|\\sum|\\int|\\sqrt|\\to|=|\^|_)[^`]*)`/g, (_, m) => m);
+
+  const displayMarkerCount = t.match(/\$\$/g)?.length || 0;
+  if (displayMarkerCount % 2 !== 0) {
+    t = t.replace(/\$\$/g, '');
+  }
 
   t = t.replace(/\$\$([^\n$]{1,200}?)\$\$/g, (match, body) => {
     if (/[\p{Script=Han}，。！？、；：]/u.test(body)) {
