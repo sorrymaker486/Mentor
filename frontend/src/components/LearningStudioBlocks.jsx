@@ -572,6 +572,8 @@ export function StudioResourcePanel({
   const [win, setWin] = useState(null);
   const [practiceScope, setPracticeScope] = useState(null);
   const abortRef = useRef(null);
+  const streamRequestSequenceRef = useRef(0);
+  const streamingTypeRef = useRef('');
   const recommendedAppliedRef = useRef('');
 
   useEffect(() => {
@@ -610,6 +612,15 @@ export function StudioResourcePanel({
 
   useEffect(() => {
     let cancelled = false;
+    streamRequestSequenceRef.current += 1;
+    streamingTypeRef.current = '';
+    try {
+      abortRef.current?.abort();
+    } catch {
+      /* ignore */
+    }
+    abortRef.current = null;
+    setStreaming(false);
     setSavedByType({});
     setStreamText('');
     setStreamErr('');
@@ -670,6 +681,10 @@ export function StudioResourcePanel({
   };
 
   const selectResource = (resourceType) => {
+    if (streamingTypeRef.current && streamingTypeRef.current !== resourceType) {
+      void startStream(resourceType);
+      return;
+    }
     setActiveKey(resourceType);
     setStreamErr('');
     if (savedByType[resourceType]?.content) {
@@ -683,6 +698,8 @@ export function StudioResourcePanel({
       setStreamErr('请先在「章节目录」中选中小节。');
       return;
     }
+    const requestId = streamRequestSequenceRef.current + 1;
+    streamRequestSequenceRef.current = requestId;
     setStreamErr('');
     setStreamText('');
     setActiveKey(resourceType);
@@ -702,6 +719,7 @@ export function StudioResourcePanel({
     }
     const ac = new AbortController();
     abortRef.current = ac;
+    streamingTypeRef.current = resourceType;
     let ok = false;
     try {
       const r = await fetch(`${apiBase}/learning/studio/resources/stream`, {
@@ -734,9 +752,14 @@ export function StudioResourcePanel({
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (streamRequestSequenceRef.current !== requestId) {
+          await reader.cancel().catch(() => {});
+          return;
+        }
         acc += dec.decode(value, { stream: true });
         setStreamText(acc);
       }
+      if (streamRequestSequenceRef.current !== requestId) return;
       acc += dec.decode();
       setStreamText(acc);
       setSavedByType((prev) => ({
@@ -752,6 +775,9 @@ export function StudioResourcePanel({
       ok = true;
       onResourceFinished?.(resourceType);
     } catch (e) {
+      if (streamRequestSequenceRef.current !== requestId) {
+        return;
+      }
       if (e?.name === 'AbortError') {
         setStreamErr('已取消。');
         setWin(null);
@@ -760,13 +786,19 @@ export function StudioResourcePanel({
         setWin(null);
       }
     } finally {
-      setStreaming(false);
-      if (ok && resourceType === 'practice_pack') setWin('practice_pack');
+      if (streamRequestSequenceRef.current === requestId) {
+        streamingTypeRef.current = '';
+        abortRef.current = null;
+        setStreaming(false);
+        if (ok && resourceType === 'practice_pack') setWin('practice_pack');
+      }
     }
   };
 
   useEffect(() => {
     return () => {
+      streamRequestSequenceRef.current += 1;
+      streamingTypeRef.current = '';
       try {
         abortRef.current?.abort();
       } catch {
@@ -776,11 +808,15 @@ export function StudioResourcePanel({
   }, []);
 
   const closeModal = () => {
+    streamRequestSequenceRef.current += 1;
+    streamingTypeRef.current = '';
     try {
       abortRef.current?.abort();
     } catch {
       /* ignore */
     }
+    abortRef.current = null;
+    setStreaming(false);
     resetStreamState();
   };
 

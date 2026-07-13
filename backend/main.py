@@ -422,6 +422,33 @@ def _gmail_from_header() -> str:
     return _gmail_env("FROM")
 
 
+def _gmail_error_hint(detail: str) -> str:
+    """Return an actionable, secret-free hint for common Google OAuth/Gmail errors."""
+    lowered = (detail or "").lower()
+    if "invalid_grant" in lowered:
+        return (
+            "刷新令牌已过期、被撤销或与当前 OAuth 客户端不匹配。若 OAuth 同意屏幕仍为 Testing，"
+            "Gmail 权限的 refresh token 通常 7 天后失效；请先切换为 In production，再重新运行 "
+            "gmail_oauth_setup.py，并替换 Railway 的 PASSWORD_RESET_GMAIL_REFRESH_TOKEN。"
+        )
+    if "invalid_client" in lowered or "unauthorized_client" in lowered:
+        return (
+            "OAuth 客户端校验失败。请确认 Railway 中的 CLIENT_ID 与 CLIENT_SECRET 来自同一个"
+            "桌面应用客户端；若密钥曾公开，请先在 Google Cloud 轮换密钥。"
+        )
+    if "insufficient" in lowered or "permission" in lowered or "forbidden" in lowered:
+        return (
+            "当前授权缺少 Gmail 发送权限。请确认已启用 Gmail API，并重新授权 "
+            "https://www.googleapis.com/auth/gmail.send。"
+        )
+    if "from" in lowered and ("invalid" in lowered or "not owned" in lowered or "alias" in lowered):
+        return (
+            "发件人不是当前 Gmail 账号或已验证别名。请将 PASSWORD_RESET_GMAIL_FROM 设置为"
+            "生成 refresh token 时登录的 Gmail 地址。"
+        )
+    return "请核对 Gmail API、OAuth 客户端、刷新令牌和发件地址配置。"
+
+
 def _gmail_access_token() -> str:
     data = urlencode(
         {
@@ -465,8 +492,20 @@ def _send_password_reset_gmail(to_addr: str, username: str, token: str) -> bool:
     msg.add_alternative(html, subtype="html")
 
     try:
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
         access_token = _gmail_access_token()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:800]
+        print(
+            f"[PASSWORD_RESET] Gmail OAuth token refresh HTTP {exc.code}: {detail}\n"
+            f"  [PASSWORD_RESET] Gmail OAuth 排障：{_gmail_error_hint(detail)}"
+        )
+        return False
+    except Exception as exc:
+        print(f"[PASSWORD_RESET] Gmail OAuth token refresh failed: {exc}")
+        return False
+
+    try:
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
         req = urllib.request.Request(
             "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
             data=json.dumps({"raw": raw}).encode("utf-8"),
@@ -485,7 +524,10 @@ def _send_password_reset_gmail(to_addr: str, username: str, token: str) -> bool:
         return True
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:800]
-        print(f"[PASSWORD_RESET] Gmail API HTTP {exc.code}: {detail}")
+        print(
+            f"[PASSWORD_RESET] Gmail API HTTP {exc.code}: {detail}\n"
+            f"  [PASSWORD_RESET] Gmail API 排障：{_gmail_error_hint(detail)}"
+        )
         return False
     except Exception as exc:
         print(f"[PASSWORD_RESET] Gmail API request failed: {exc}")
@@ -860,6 +902,8 @@ def _deliver_password_reset_notification(username: str, token: str, user_email: 
                     "Gmail API 发送未成功。请查看 [PASSWORD_RESET] Gmail API 开头的日志；"
                     "确认 PASSWORD_RESET_GMAIL_CLIENT_ID、PASSWORD_RESET_GMAIL_CLIENT_SECRET、"
                     "PASSWORD_RESET_GMAIL_REFRESH_TOKEN 与 PASSWORD_RESET_GMAIL_FROM 已正确配置。"
+                    "若日志包含 invalid_grant，请先把 Google OAuth 同意屏幕切换为 In production，"
+                    "再重新生成 refresh token 并更新 Railway。"
                     "如果已配置 SendGrid、Resend 或 SMTP，也请查看对应 [PASSWORD_RESET] 报错。"
                 )
     elif _sendgrid_configured():
@@ -3530,47 +3574,55 @@ def learning_studio_resource_stream(body: StudioResourceStreamBody, db: Session 
 
         def generate_chunks():
             raw_answer, clean_answer = "", ""
-            for chunk in response:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    delta = chunk.choices[0].delta.content
-                    raw_answer += delta
-                    new_clean = collapse_repetition(raw_answer)
-                    emit = safe_stream_delta(clean_answer, new_clean)
-                    if emit:
-                        yield emit
-                    clean_answer = new_clean
-            final_text = clean_answer or collapse_repetition(raw_answer)
-            if final_text.strip():
-                try:
-                    with SessionLocal() as event_db:
-                        _append_resource_event(
-                            event_db,
-                            uid,
-                            body.subject,
-                            {
-                                "resource_type": body.resource_type,
-                                "chapter_id": body.chapter_id,
-                                "section_id": body.section_id,
-                                "scope_label": scope_label,
-                                "focus": resource_context,
-                                "focus_terms": _extract_resource_focus_terms(final_text, scope_label),
-                                "summary": final_text.strip()[:900],
-                                "source_count": source_count,
-                            },
-                        )
-                        _save_resource_artifact(
-                            event_db,
-                            user_id=uid,
-                            subject=body.subject,
-                            chapter_id=body.chapter_id,
-                            section_id=body.section_id,
-                            resource_type=body.resource_type,
-                            scope_label=scope_label,
-                            content=final_text,
-                            source_count=source_count,
-                        )
-                except Exception as event_exc:
-                    print(f"[RESOURCE_EVENT] save failed: {event_exc}", flush=True)
+            try:
+                for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        delta = chunk.choices[0].delta.content
+                        raw_answer += delta
+                        new_clean = collapse_repetition(raw_answer)
+                        emit = safe_stream_delta(clean_answer, new_clean)
+                        if emit:
+                            yield emit
+                        clean_answer = new_clean
+                final_text = clean_answer or collapse_repetition(raw_answer)
+                if final_text.strip():
+                    try:
+                        with SessionLocal() as event_db:
+                            _append_resource_event(
+                                event_db,
+                                uid,
+                                body.subject,
+                                {
+                                    "resource_type": body.resource_type,
+                                    "chapter_id": body.chapter_id,
+                                    "section_id": body.section_id,
+                                    "scope_label": scope_label,
+                                    "focus": resource_context,
+                                    "focus_terms": _extract_resource_focus_terms(final_text, scope_label),
+                                    "summary": final_text.strip()[:900],
+                                    "source_count": source_count,
+                                },
+                            )
+                            _save_resource_artifact(
+                                event_db,
+                                user_id=uid,
+                                subject=body.subject,
+                                chapter_id=body.chapter_id,
+                                section_id=body.section_id,
+                                resource_type=body.resource_type,
+                                scope_label=scope_label,
+                                content=final_text,
+                                source_count=source_count,
+                            )
+                    except Exception as event_exc:
+                        print(f"[RESOURCE_EVENT] save failed: {event_exc}", flush=True)
+            finally:
+                close_stream = getattr(response, "close", None)
+                if callable(close_stream):
+                    try:
+                        close_stream()
+                    except Exception:
+                        pass
 
         hdr = safety_headers(spec["agent_chain"])
         hdr["X-Resource-Type"] = body.resource_type

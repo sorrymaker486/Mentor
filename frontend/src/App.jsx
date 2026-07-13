@@ -1179,6 +1179,8 @@ function V29ResourceWorkspace({
   const [practiceQuizOpen, setPracticeQuizOpen] = useState(false);
   const [practiceScope, setPracticeScope] = useState(null);
   const abortRef = useRef(null);
+  const resourceRequestSequenceRef = useRef(0);
+  const streamingKeyRef = useRef('');
   const userTouchedResourceRef = useRef(false);
   const recommendedAppliedRef = useRef('');
   const resourceScopeKey = `${subject || ''}|${chapterId || ''}|${sectionId || ''}`;
@@ -1197,11 +1199,14 @@ function V29ResourceWorkspace({
 
     return () => {
       cancelled = true;
+      resourceRequestSequenceRef.current += 1;
+      streamingKeyRef.current = '';
       try {
         abortRef.current?.abort();
       } catch {
         /* ignore */
       }
+      abortRef.current = null;
     };
   }, [apiBase]);
 
@@ -1235,6 +1240,15 @@ function V29ResourceWorkspace({
 
   useEffect(() => {
     let cancelled = false;
+    resourceRequestSequenceRef.current += 1;
+    streamingKeyRef.current = '';
+    try {
+      abortRef.current?.abort();
+    } catch {
+      /* ignore */
+    }
+    abortRef.current = null;
+    setStreamingKey('');
     userTouchedResourceRef.current = false;
     recommendedAppliedRef.current = '';
     setPracticeScope(null);
@@ -1302,7 +1316,6 @@ function V29ResourceWorkspace({
     const nextKey = key || activeEntry?.key;
     if (!nextKey) return;
     setActiveKey(nextKey);
-    setResourceDrafts((prev) => ({ ...prev, [nextKey]: { text: '', err: '' } }));
     if (nextKey === 'practice_pack') setPracticeQuizOpen(false);
 
     if (!chapterId || !sectionId) {
@@ -1310,14 +1323,25 @@ function V29ResourceWorkspace({
       return;
     }
 
+    const previousKey = streamingKeyRef.current;
+    const requestId = resourceRequestSequenceRef.current + 1;
+    resourceRequestSequenceRef.current = requestId;
     try {
       abortRef.current?.abort();
     } catch {
       /* ignore */
     }
 
+    setResourceDrafts((prev) => {
+      const next = { ...prev, [nextKey]: { text: '', err: '' } };
+      if (previousKey && previousKey !== nextKey) {
+        next[previousKey] = { text: '', err: '' };
+      }
+      return next;
+    });
     const ac = new AbortController();
     abortRef.current = ac;
+    streamingKeyRef.current = nextKey;
     setStreamingKey(nextKey);
     const requestScope = { chapterId, sectionId, scopeLabel };
     if (nextKey === 'practice_pack') setPracticeScope(requestScope);
@@ -1356,10 +1380,15 @@ function V29ResourceWorkspace({
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (resourceRequestSequenceRef.current !== requestId) {
+          await reader.cancel().catch(() => {});
+          return;
+        }
         acc += decoder.decode(value, { stream: true });
         setResourceDrafts((prev) => ({ ...prev, [nextKey]: { text: acc, err: '' } }));
       }
 
+      if (resourceRequestSequenceRef.current !== requestId) return;
       acc += decoder.decode();
       setResourceDrafts((prev) => ({ ...prev, [nextKey]: { text: acc, err: '' } }));
       if (nextKey === 'mind_map') onMindMapReady?.(decodeResourceMarkdownStream(acc));
@@ -1369,14 +1398,18 @@ function V29ResourceWorkspace({
       }
       onResourceFinished?.(nextKey);
     } catch (e) {
-      if (e?.name !== 'AbortError') {
+      if (resourceRequestSequenceRef.current === requestId && e?.name !== 'AbortError') {
         setResourceDrafts((prev) => ({
           ...prev,
           [nextKey]: { text: '', err: e?.message || '材料准备失败，请稍后再试。' },
         }));
       }
     } finally {
-      setStreamingKey((current) => (current === nextKey ? '' : current));
+      if (resourceRequestSequenceRef.current === requestId) {
+        streamingKeyRef.current = '';
+        abortRef.current = null;
+        setStreamingKey('');
+      }
     }
   };
 
@@ -1411,7 +1444,11 @@ function V29ResourceWorkspace({
                   aria-pressed={entry.key === activeEntry?.key}
                   onClick={() => {
                     userTouchedResourceRef.current = true;
-                    setActiveKey(entry.key);
+                    if (streamingKeyRef.current && streamingKeyRef.current !== entry.key) {
+                      void startResource(entry.key);
+                    } else {
+                      setActiveKey(entry.key);
+                    }
                   }}
                 >
                   <span>{entry.title}</span>
@@ -2061,16 +2098,7 @@ const LoginView = ({ onLoginSuccess }) => {
             )}
             {authStep === 'register' && <V29Button quiet onClick={goLogin}>{authVisual.secondary}</V29Button>}
             {authStep === 'forgot' && (
-              <V29Button quiet onClick={() => {
-                if (tokenReady) {
-                  setAuthStep('forgot-reset');
-                  setErrorMsg('');
-                  return;
-                }
-                goLogin();
-              }}>
-                {tokenReady ? '继续重置' : authVisual.secondary}
-              </V29Button>
+              <V29Button quiet onClick={goLogin}>{authVisual.secondary}</V29Button>
             )}
             {authStep === 'forgot-reset' && <V29Button quiet onClick={() => setAuthStep('forgot')}>{authVisual.secondary}</V29Button>}
             {authStep === 'login' && <V29Button quiet onClick={() => setAuthStep('register')}>创建账号</V29Button>}
@@ -3024,8 +3052,6 @@ const ChatView = ({
 }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const welcomeMessage = { role: 'assistant', content: `你好 **${username}**，我们从 **${subject}** 里挑一个点，慢慢把它讲亮。` };
-
   const [catalog, setCatalog] = useState(() => readCatalogCache(subject)?.chapters || []);
   const [catalogLoading, setCatalogLoading] = useState(
     () => !readCatalogCache(subject)?.chapters?.length
@@ -3035,7 +3061,7 @@ const ChatView = ({
   const [selectedChapterId, setSelectedChapterId] = useState('');
   const [selectedSectionId, setSelectedSectionId] = useState('');
 
-  const [messages, setMessages] = useState([welcomeMessage]);
+  const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [pendingImages, setPendingImages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -3210,7 +3236,7 @@ const ChatView = ({
         setCurrentSessionId(null);
         setLearnMode(false);
         setQuizModal(null);
-        setMessages([welcomeMessage]);
+        setMessages([]);
         setInputText('');
       }
       await loadSessions();
@@ -3241,7 +3267,7 @@ const ChatView = ({
 
       if (list.length === 0) {
         setCurrentSessionId(null);
-        setMessages([welcomeMessage]);
+        setMessages([]);
         return [];
       }
       return list;
@@ -3337,7 +3363,7 @@ const ChatView = ({
 
   const loadSessionHistory = async (sessionId) => {
     if (!sessionId) {
-      setMessages([welcomeMessage]);
+      setMessages([]);
       return;
     }
 
@@ -3365,12 +3391,12 @@ const ChatView = ({
         setMessages(data);
         preferUiOverHistoryUntilRef.current = null;
       } else if (!streamUiGuard) {
-        setMessages([welcomeMessage]);
+        setMessages([]);
       }
     } catch (e) {
       console.error(e);
       if (!streamUiGuard) {
-        setMessages([welcomeMessage]);
+        setMessages([]);
       }
     }
   };
@@ -3400,7 +3426,7 @@ const ChatView = ({
     setCurrentSessionId(null);
     setInputText('');
     setPendingImages([]);
-    setMessages([welcomeMessage]);
+    setMessages([]);
     setSessions([]);
     setSessionQuery('');
     setHistoryOpen(Boolean(initialOpenHistory));
@@ -3499,7 +3525,7 @@ const ChatView = ({
             savedSession ||
             matchingSessions.find((session) => String(session.chapter || '') === targetScope) ||
             latestSession;
-          setCurrentSessionId(targetSession?.id ?? null);
+          setCurrentSessionId(initialMode === 'guided' ? (targetSession?.id ?? null) : null);
           await loadLearningProgress(target.chapterId, target.sectionId);
         }
         initialScopeReadyRef.current = true;
@@ -3807,7 +3833,7 @@ const ChatView = ({
       if (currentSessionId !== null) {
         setCurrentSessionId(null);
       }
-      setMessages([welcomeMessage]);
+      setMessages([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionScopeKey, sessions, learnMode, isLoading]);
@@ -3815,7 +3841,7 @@ const ChatView = ({
   useEffect(() => {
     if (!currentSessionId) {
       if (!learnMode) {
-        setMessages([welcomeMessage]);
+        setMessages([]);
       }
       return;
     }
@@ -3916,10 +3942,7 @@ const ChatView = ({
       preferUiOverHistoryUntilRef.current = null;
       setLearnMode(false);
       setCurrentSessionId(null);
-      setMessages([
-        welcomeMessage,
-        { role: 'assistant', content: `无法开始带学：${e?.message || '未知错误'}` },
-      ]);
+      setMessages([{ role: 'assistant', content: `无法开始带学：${e?.message || '未知错误'}` }]);
     } finally {
       setIsLoading(false);
     }
@@ -5009,7 +5032,7 @@ const ChatView = ({
       setSelectedSectionId(firstSection.id);
       setExpandedChapters((prev) => ({ ...prev, [firstChapter.id]: true }));
     }
-    setMessages([welcomeMessage]);
+    setMessages([]);
     setInputText('');
     setHistoryOpen(false);
   };
@@ -5664,7 +5687,7 @@ const ChatView = ({
                     setSelectedSectionId(s0.id);
                     setExpandedChapters({ [ch0.id]: true });
                   }
-                  setMessages([welcomeMessage]);
+                  setMessages([]);
                   setInputText('');
                 }}
                 className="pa-motion-ui w-full border border-[#1a1f24]/[0.1] bg-[#1a1f24] py-3.5 text-[11px] font-semibold tracking-[0.22em] text-[#faf9f7] transition-all duration-500 hover:-translate-y-0.5 hover:bg-[#242b32] hover:shadow-[0_14px_32px_rgba(26,31,36,0.15)] active:translate-y-0"

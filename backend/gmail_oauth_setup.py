@@ -5,7 +5,10 @@ Prerequisites:
   1. Create an OAuth Client ID in Google Cloud Console.
   2. Use an "Desktop app" OAuth client.
   3. Enable the Gmail API.
-  4. Run:
+  4. For long-running deployments, set the OAuth consent screen publishing
+     status to "In production". Tokens issued while an external app remains
+     in "Testing" normally expire after 7 days.
+  5. Run:
        python gmail_oauth_setup.py --client-id ... --client-secret ...
 
 The script starts a local callback server, asks you to sign in with Gmail,
@@ -127,6 +130,11 @@ def main() -> None:
         print(f"PASSWORD_RESET_GMAIL_FROM={args.from_email}")
     else:
         print("PASSWORD_RESET_GMAIL_FROM=your-gmail-address@gmail.com")
+    print(
+        "\nImportant: if the OAuth consent screen is still in Testing, this refresh token "
+        "normally expires after 7 days. Switch the app to In production before creating "
+        "the token used by a long-running Railway deployment."
+    )
 
 
 if __name__ == "__main__":
