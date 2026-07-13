@@ -3416,6 +3416,70 @@ a.dp2-button {
   line-height: 1.55;
 }
 
+/* The result board has a fixed viewport height. Keep the review column as its
+   own scroll region so long explanations never collapse into adjacent items. */
+.dp2-functional-modal .dp2-result {
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.dp2-functional-modal .dp2-result-board {
+  min-width: 0;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.dp2-functional-modal .dp2-result-list {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.2rem 1rem 1.5rem 0.15rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(91, 112, 111, 0.25) transparent;
+}
+
+.dp2-functional-modal .dp2-result-card {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  margin: 0 0 1.35rem;
+  padding: 0 0 1.35rem 1rem;
+  border-bottom: 1px solid rgba(91, 112, 111, 0.12);
+  overflow: visible;
+}
+
+.dp2-functional-modal .dp2-result-card h4,
+.dp2-functional-modal .dp2-result-card p {
+  position: static;
+  display: block;
+  min-width: 0;
+  height: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.dp2-functional-modal .dp2-result-card > span {
+  position: static;
+  display: block;
+  margin-bottom: 0.55rem;
+}
+
+.dp2-functional-modal .dp2-ai-queue {
+  min-width: 0;
+  min-height: 0;
+  align-content: center;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.35rem;
+  scrollbar-width: none;
+}
+
 .dp2-result-card p {
   margin: 0.35rem 0 0;
 }
